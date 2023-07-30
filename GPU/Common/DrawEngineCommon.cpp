@@ -219,8 +219,7 @@ void DrawEngineCommon::UpdatePlanes() {
 	Vec2f minViewport = (minOffset_ - Vec2f(gstate.getViewportXCenter(), gstate.getViewportYCenter())) * inverseViewportScale;
 	Vec2f maxViewport = (maxOffset_ - Vec2f(gstate.getViewportXCenter(), gstate.getViewportYCenter())) * inverseViewportScale;
 
-	Lin::Matrix4x4 applyViewport;
-	applyViewport.empty();
+	Lin::Matrix4x4 applyViewport{};
 	// Scale to the viewport's size.
 	applyViewport.xx = 2.0f / (maxViewport.x - minViewport.x);
 	applyViewport.yy = 2.0f / (maxViewport.y - minViewport.y);
@@ -245,7 +244,20 @@ void DrawEngineCommon::UpdatePlanes() {
 //
 // It does the simplest and safest test possible: If all points of a bbox is outside a single of
 // our clipping planes, we reject the box. Tighter bounds would be desirable but would take more calculations.
-bool DrawEngineCommon::TestBoundingBox(const void *control_points, const void *inds, int vertexCount, u32 vertType) {
+// The name is a slight misnomer, because any bounding shape will work, not just boxes.
+//
+// Potential optimizations:
+// * SIMD-ify the plane culling, and also the vertex data conversion (could even group together xxxxyyyyzzzz for example)
+// * Compute min/max of the verts, and then compute a bounding sphere and check that against the planes.
+//   - Less accurate, but..
+//   - Only requires six plane evaluations then.
+
+bool DrawEngineCommon::TestBoundingBox(const void *vdata, const void *inds, int vertexCount, u32 vertType) {
+	// Grab temp buffer space from large offsets in decoded_. Not exactly safe for large draws.
+	if (vertexCount > 1024) {
+		return true;
+	}
+
 	SimpleVertex *corners = (SimpleVertex *)(decoded_ + 65536 * 12);
 	float *verts = (float *)(decoded_ + 65536 * 18);
 
@@ -254,51 +266,81 @@ bool DrawEngineCommon::TestBoundingBox(const void *control_points, const void *i
 	if (gstate_c.Use(GPU_USE_VIRTUAL_REALITY))
 		return true;
 
-	// Try to skip NormalizeVertices if it's pure positions. No need to bother with a vertex decoder
-	// and a large vertex format.
-	if ((vertType & 0xFFFFFF) == GE_VTYPE_POS_FLOAT && !inds) {
-		verts = (float *)control_points;
-	} else if ((vertType & 0xFFFFFF) == GE_VTYPE_POS_8BIT && !inds) {
-		const s8 *vtx = (const s8 *)control_points;
-		for (int i = 0; i < vertexCount * 3; i++) {
-			verts[i] = vtx[i] * (1.0f / 128.0f);
-		}
-	} else if ((vertType & 0xFFFFFF) == GE_VTYPE_POS_16BIT && !inds) {
-		const s16 *vtx = (const s16 *)control_points;
-		for (int i = 0; i < vertexCount * 3; i++) {
-			verts[i] = vtx[i] * (1.0f / 32768.0f);
-		}
-	} else {
-		// Simplify away indices, bones, and morph before proceeding.
-		u8 *temp_buffer = decoded_ + 65536 * 24;
-		int vertexSize = 0;
-
-		u16 indexLowerBound = 0;
-		u16 indexUpperBound = (u16)vertexCount - 1;
-		if (vertexCount > 0 && inds) {
-			GetIndexBounds(inds, vertexCount, vertType, &indexLowerBound, &indexUpperBound);
-		}
-
-		// Force software skinning.
-		bool wasApplyingSkinInDecode = decOptions_.applySkinInDecode;
-		decOptions_.applySkinInDecode = true;
-		NormalizeVertices((u8 *)corners, temp_buffer, (const u8 *)control_points, indexLowerBound, indexUpperBound, vertType);
-		decOptions_.applySkinInDecode = wasApplyingSkinInDecode;
-
-		IndexConverter conv(vertType, inds);
-		for (int i = 0; i < vertexCount; i++) {
-			verts[i * 3] = corners[conv(i)].pos.x;
-			verts[i * 3 + 1] = corners[conv(i)].pos.y;
-			verts[i * 3 + 2] = corners[conv(i)].pos.z;
-		}
-	}
-
 	// Due to world matrix updates per "thing", this isn't quite as effective as it could be if we did world transform
 	// in here as well. Though, it still does cut down on a lot of updates in Tekken 6.
 	if (gstate_c.IsDirty(DIRTY_CULL_PLANES)) {
 		UpdatePlanes();
 		gpuStats.numPlaneUpdates++;
 		gstate_c.Clean(DIRTY_CULL_PLANES);
+	}
+
+	// Try to skip NormalizeVertices if it's pure positions. No need to bother with a vertex decoder
+	// and a large vertex format.
+	if ((vertType & 0xFFFFFF) == GE_VTYPE_POS_FLOAT && !inds) {
+		verts = (float *)vdata;
+	} else if ((vertType & 0xFFFFFF) == GE_VTYPE_POS_8BIT && !inds) {
+		const s8 *vtx = (const s8 *)vdata;
+		for (int i = 0; i < vertexCount * 3; i++) {
+			verts[i] = vtx[i] * (1.0f / 128.0f);
+		}
+	} else if ((vertType & 0xFFFFFF) == GE_VTYPE_POS_16BIT && !inds) {
+		const s16 *vtx = (const s16 *)vdata;
+		for (int i = 0; i < vertexCount * 3; i++) {
+			verts[i] = vtx[i] * (1.0f / 32768.0f);
+		}
+	} else {
+		// Simplify away indices, bones, and morph before proceeding.
+		u8 *temp_buffer = decoded_ + 65536 * 24;
+
+		if ((inds || (vertType & (GE_VTYPE_WEIGHT_MASK | GE_VTYPE_MORPHCOUNT_MASK)))) {
+			u16 indexLowerBound = 0;
+			u16 indexUpperBound = (u16)vertexCount - 1;
+
+			if (vertexCount > 0 && inds) {
+				GetIndexBounds(inds, vertexCount, vertType, &indexLowerBound, &indexUpperBound);
+			}
+
+			// Force software skinning.
+			bool wasApplyingSkinInDecode = decOptions_.applySkinInDecode;
+			decOptions_.applySkinInDecode = true;
+			NormalizeVertices((u8 *)corners, temp_buffer, (const u8 *)vdata, indexLowerBound, indexUpperBound, vertType);
+			decOptions_.applySkinInDecode = wasApplyingSkinInDecode;
+
+			IndexConverter conv(vertType, inds);
+			for (int i = 0; i < vertexCount; i++) {
+				verts[i * 3] = corners[conv(i)].pos.x;
+				verts[i * 3 + 1] = corners[conv(i)].pos.y;
+				verts[i * 3 + 2] = corners[conv(i)].pos.z;
+			}
+		} else {
+			// Simple, most common case.
+			VertexDecoder *dec = GetVertexDecoder(vertType);
+			int stride = dec->VertexSize();
+			int offset = dec->posoff;
+			switch (vertType & GE_VTYPE_POS_MASK) {
+			case GE_VTYPE_POS_8BIT:
+				for (int i = 0; i < vertexCount; i++) {
+					const s8 *data = (const s8 *)vdata + i * stride + offset;
+					for (int j = 0; j < 3; j++) {
+						verts[i * 3 + j] = data[j] * (1.0f / 128.0f);
+					}
+				}
+				break;
+			case GE_VTYPE_POS_16BIT:
+				for (int i = 0; i < vertexCount; i++) {
+					const s16 *data = ((const s16 *)((const s8 *)vdata + i * stride + offset));
+					for (int j = 0; j < 3; j++) {
+						verts[i * 3 + j] = data[j] * (1.0f / 32768.0f);
+					}
+				}
+				break;
+			case GE_VTYPE_POS_FLOAT:
+				for (int i = 0; i < vertexCount; i++) {
+					memcpy(&verts[i * 3], (const u8 *)vdata + stride * i + offset, sizeof(float) * 3);
+				}
+				break;
+			}
+		}
 	}
 
 	// Note: near/far are not checked without clamp/clip enabled, so we skip those planes.
@@ -621,6 +663,31 @@ int DrawEngineCommon::ExtendNonIndexedPrim(const uint32_t *cmd, const uint32_t *
 	vertexCountInDrawCalls_ += totalCount;
 	*bytesRead = totalCount * dec_->VertexSize();
 	return cmd - start;
+}
+
+void DrawEngineCommon::SkipPrim(GEPrimitiveType prim, int vertexCount, u32 vertTypeID, int *bytesRead) {
+	if (!indexGen.PrimCompatible(prevPrim_, prim)) {
+		DispatchFlush();
+	}
+
+	// This isn't exactly right, if we flushed, since prims can straddle previous calls.
+	// But it generally works for common usage.
+	if (prim == GE_PRIM_KEEP_PREVIOUS) {
+		// Has to be set to something, let's assume POINTS (0) if no previous.
+		if (prevPrim_ == GE_PRIM_INVALID)
+			prevPrim_ = GE_PRIM_POINTS;
+		prim = prevPrim_;
+	} else {
+		prevPrim_ = prim;
+	}
+
+	// If vtype has changed, setup the vertex decoder.
+	if (vertTypeID != lastVType_ || !dec_) {
+		dec_ = GetVertexDecoder(vertTypeID);
+		lastVType_ = vertTypeID;
+	}
+
+	*bytesRead = vertexCount * dec_->VertexSize();
 }
 
 // vertTypeID is the vertex type but with the UVGen mode smashed into the top bits.
