@@ -260,6 +260,7 @@ bool DrawEngineCommon::TestBoundingBox(const void *vdata, const void *inds, int 
 
 	SimpleVertex *corners = (SimpleVertex *)(decoded_ + 65536 * 12);
 	float *verts = (float *)(decoded_ + 65536 * 18);
+	int vertStride = 3;
 
 	// Although this may lead to drawing that shouldn't happen, the viewport is more complex on VR.
 	// Let's always say objects are within bounds.
@@ -299,7 +300,7 @@ bool DrawEngineCommon::TestBoundingBox(const void *vdata, const void *inds, int 
 			if (vertexCount > 0 && inds) {
 				GetIndexBounds(inds, vertexCount, vertType, &indexLowerBound, &indexUpperBound);
 			}
-
+			// TODO: Avoid normalization if just plain skinning.
 			// Force software skinning.
 			bool wasApplyingSkinInDecode = decOptions_.applySkinInDecode;
 			decOptions_.applySkinInDecode = true;
@@ -335,9 +336,12 @@ bool DrawEngineCommon::TestBoundingBox(const void *vdata, const void *inds, int 
 				}
 				break;
 			case GE_VTYPE_POS_FLOAT:
-				for (int i = 0; i < vertexCount; i++) {
-					memcpy(&verts[i * 3], (const u8 *)vdata + stride * i + offset, sizeof(float) * 3);
-				}
+				// No need to copy in this case, we can just read directly from the source format with a stride.
+				verts = (float *)((uint8_t *)vdata + offset);
+				vertStride = stride / 4;
+				// Previous code:
+				// for (int i = 0; i < vertexCount; i++)
+				//   memcpy(&verts[i * 3], (const u8 *)vdata + stride * i + offset, sizeof(float) * 3);
 				break;
 			}
 		}
@@ -352,7 +356,8 @@ bool DrawEngineCommon::TestBoundingBox(const void *vdata, const void *inds, int 
 			// Test against the frustum planes, and count.
 			// TODO: We should test 4 vertices at a time using SIMD.
 			// I guess could also test one vertex against 4 planes at a time, though a lot of waste at the common case of 6.
-			float value = planes_[plane].Test(verts + i * 3);
+			const float *pos = verts + i * vertStride;
+			float value = planes_[plane].Test(pos);
 			if (value <= -FLT_EPSILON)
 				out++;
 			else
