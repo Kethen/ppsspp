@@ -992,7 +992,7 @@ void GPUCommonHW::Execute_Prim(u32 op, u32 diff) {
 
 #define MAX_CULL_CHECK_COUNT 6
 
-#define PASSES_CULLING ((vertexType & (GE_VTYPE_THROUGH_MASK | GE_VTYPE_MORPHCOUNT_MASK | GE_VTYPE_WEIGHT_MASK)) || count > MAX_CULL_CHECK_COUNT)
+#define PASSES_CULLING ((vertexType & (GE_VTYPE_THROUGH_MASK | GE_VTYPE_MORPHCOUNT_MASK | GE_VTYPE_WEIGHT_MASK | GE_VTYPE_IDX_MASK)) || count > MAX_CULL_CHECK_COUNT)
 
 	// If certain conditions are true, do frustum culling.
 	bool passCulling = PASSES_CULLING;
