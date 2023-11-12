@@ -615,6 +615,21 @@ int SavedataParam::Save(SceUtilitySavedataParam* param, const std::string &saveD
 		std::string snd0path = dirPath + "/" + SND0_FILENAME;
 		WritePSPFile(snd0path, param->snd0FileData.buf, param->snd0FileData.size);
 	}
+
+	// Save param
+	std::string saveParamPath = dirPath + "/" + "save_param.bin";
+	WritePSPFile(saveParamPath, (u8 *)param, sizeof(SceUtilitySavedataParam));
+
+	// Save plaintext
+	std::string rawDataPath = dirPath + "/" + "raw_data.bin";
+	if(param->dataBufSize != 0){
+		WritePSPFile(rawDataPath, (u8 *)param->dataBuf, param->dataBufSize);
+	}
+	rawDataPath = dirPath + "/" + "raw_data_trimmed.bin";
+	if(param->dataSize != 0){
+		WritePSPFile(rawDataPath, (u8 *)param->dataBuf, param->dataSize);
+	}
+
 	return 0;
 }
 
@@ -636,6 +651,10 @@ int SavedataParam::Load(SceUtilitySavedataParam *param, const std::string &saveD
 	if (!fileName.empty() && !pspFileSystem.GetFileInfo(filePath).exists) {
 		return isRWMode ? SCE_UTILITY_SAVEDATA_ERROR_RW_FILE_NOT_FOUND : SCE_UTILITY_SAVEDATA_ERROR_LOAD_FILE_NOT_FOUND;
 	}
+
+	// Save param
+	std::string loadParamPath = dirPath + "/" + "load_before_param.bin";
+	WritePSPFile(loadParamPath, (u8 *)param, sizeof(SceUtilitySavedataParam));
 
 	// If it wasn't zero, force to zero before loading and especially in case of error.
 	// This isn't reset if the path doesn't even exist.
@@ -662,6 +681,28 @@ int SavedataParam::Load(SceUtilitySavedataParam *param, const std::string &saveD
 	LoadFile(dirPath, PIC1_FILENAME, &param->pic1FileData);
 	// Load SND0.AT3
 	LoadFile(dirPath, SND0_FILENAME, &param->snd0FileData);
+
+	// Save param again
+	loadParamPath = dirPath + "/" + "load_after_param.bin";
+	WritePSPFile(loadParamPath, (u8 *)param, sizeof(SceUtilitySavedataParam));
+
+	// pollute param if instructed
+	int fd = pspFileSystem.OpenFile("ms0:/pollute_save_sfo_param", FILEACCESS_READ);
+	if(fd != 0){
+		pspFileSystem.ReadFile(fd, param->sfoParam.unknown, 3);
+		pspFileSystem.CloseFile(fd);
+	}
+
+	// do that for bind too
+	fd = pspFileSystem.OpenFile("ms0:/pollute_save_bind", FILEACCESS_READ);
+	if(fd != 0){
+		pspFileSystem.ReadFile(fd, (u8*)&param->bind, 4);
+		pspFileSystem.CloseFile(fd);
+	}
+
+	// Save param again
+	loadParamPath = dirPath + "/" + "load_after_pollution_param.bin";
+	WritePSPFile(loadParamPath, (u8 *)param, sizeof(SceUtilitySavedataParam));
 
 	return 0;
 }
