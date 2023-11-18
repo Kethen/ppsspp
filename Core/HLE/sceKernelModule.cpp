@@ -532,6 +532,10 @@ struct SceKernelSMOption {
 static int actionAfterModule;
 
 static std::set<SceUID> loadedModules;
+
+static bool licenseeKeyLoaded;
+static uint8_t licenseeKey[0x10];
+
 // STATE END
 //////////////////////////////////////////////////////////////////////////
 
@@ -542,7 +546,7 @@ static void __KernelModuleInit()
 
 void __KernelModuleDoState(PointerWrap &p)
 {
-	auto s = p.Section("sceKernelModule", 1, 2);
+	auto s = p.Section("sceKernelModule", 1, 3);
 	if (!s)
 		return;
 
@@ -551,6 +555,11 @@ void __KernelModuleDoState(PointerWrap &p)
 
 	if (s >= 2) {
 		Do(p, loadedModules);
+	}
+
+	if (s >= 3){
+		Do(p, licenseeKeyLoaded);
+		DoArray(p, licenseeKey, 0x10);
 	}
 
 	if (p.mode == p.MODE_READ) {
@@ -2734,3 +2743,12 @@ void Register_ModuleMgrForKernel()
 	RegisterModule("ModuleMgrForKernel", ARRAY_SIZE(ModuleMgrForKernel), ModuleMgrForKernel);		
 
 };
+
+void setLicenseeKey(const uint8_t *key){
+	licenseeKeyLoaded = true;
+	memcpy(licenseeKey, key, 0x10);
+}
+
+void clearLicenseeKey(){
+	licenseeKeyLoaded = false;
+}

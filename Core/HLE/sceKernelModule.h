@@ -55,3 +55,7 @@ void Register_ModuleMgrForKernel();
 
 // Expose for use by KUBridge.
 u32 sceKernelLoadModule(const char *name, u32 flags, u32 optionAddr);
+
+// Expose for use by scePspNpDrm_user.
+void setLicenseeKey(const uint8_t *key);
+void clearLicenseeKey();

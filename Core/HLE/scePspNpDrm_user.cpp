@@ -3,16 +3,26 @@
 #include "Core/HLE/HLE.h"
 #include "Core/HLE/FunctionWrappers.h"
 #include "Core/HLE/sceIo.h"
+#include "Core/HLE/sceKernelModule.h"
+#include "Core/MemMap.h"
 
 static int sceNpDrmSetLicenseeKey(u32 npDrmKeyAddr)
 {
 	INFO_LOG(HLE, "call sceNpDrmSetLicenseeKey(%08x)", npDrmKeyAddr);
+	PSPPointer<uint8_t> keyPspPtr = PSPPointer<uint8_t>::Create(npDrmKeyAddr);
+	const uint8_t *key = keyPspPtr.PtrOrNull();
+	if(key == nullptr){
+		ERROR_LOG(HLE, "sceNpDrmSetLicenseeKey: invalid address %08x", npDrmKeyAddr);
+	}else{
+		setLicenseeKey(key);
+	}
 	return 0;
 }
 
 static int sceNpDrmClearLicenseeKey()
 {
 	INFO_LOG(HLE, "call sceNpDrmClearLicenseeKey()");
+	clearLicenseeKey();
 	return 0;
 }
 
