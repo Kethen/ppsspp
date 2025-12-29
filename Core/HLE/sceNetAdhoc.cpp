@@ -1654,6 +1654,41 @@ u32 sceNetAdhocInit() {
 	return hleLogWarning(Log::sceNet, SCE_NET_ADHOC_ERROR_ALREADY_INITIALIZED, "already initialized");
 }
 
+int _resolveMAC(u32 mac_in, u32 ip_out){
+	INFO_LOG(Log::sceNet, "_resolveMAC(0x%x, 0x%x) at %08x", mac_in, ip_out, currentMIPS->pc);
+	auto mac_in_obj = PSPPointer<SceNetEtherAddr>::Create(mac_in);
+	if (!mac_in_obj.IsValid()){
+		ERROR_LOG(Log::sceNet, "bad mac_in pointer 0x%x", mac_in);
+		return hleLogVerbose(Log::sceNet, 1);
+	}
+	auto ip_out_obj = PSPPointer<uint32_t>::Create(ip_out);
+	if (!ip_out_obj.IsValid()){
+		ERROR_LOG(Log::sceNet, "bad ip_out pointer 0x%x", ip_out);
+		return hleLogVerbose(Log::sceNet, 1);
+	}
+	SceNetEtherAddr mac_in_cpy = *mac_in_obj;
+	uint32_t ip = 0;
+	u16 port_offset = 0;
+	bool resolve_status = resolveMAC(&mac_in_cpy, &ip, &port_offset);
+	*ip_out_obj = ip;
+	int ret = resolve_status ? 0 : 1;
+	return hleLogVerbose(Log::sceNet, ret);
+}
+
+int _resolveIP(u32 ip_in, u32 mac_out){
+	INFO_LOG(Log::sceNet, "_resolveIP(0x%x, 0x%x) at %08x", ip_in, mac_out, currentMIPS->pc);
+	auto mac_out_obj = PSPPointer<SceNetEtherAddr>::Create(mac_out);
+	if (!mac_out_obj.IsValid()){
+		ERROR_LOG(Log::sceNet, "bad mac_out pointer 0x%x", mac_out);
+		return hleLogVerbose(Log::sceNet, 1);
+	}
+	SceNetEtherAddr mac = {0};
+	bool resolve_status = resolveIP(ip_in, &mac);
+	*mac_out_obj = mac;
+	int ret = resolve_status ? 0 : 1;
+	return hleLogVerbose(Log::sceNet, ret);
+}
+
 int sceNetAdhocctlInit(int stackSize, int prio, u32 productAddr) {
 	INFO_LOG(Log::sceNet, "sceNetAdhocctlInit(%i, %i, %08x) at %08x", stackSize, prio, productAddr, currentMIPS->pc);
 
@@ -5807,6 +5842,11 @@ const HLEFunction sceNetAdhocctl[] = {
 	{0XB0B80E80, &WrapI_CIIIUUI<sceNetAdhocctlCreateEnterGameModeMin>, "sceNetAdhocctlCreateEnterGameModeMin",   'i', "siiixxi"  }, // ??
 };
 
+const HLEFunction sceNetAdhocctlInternal[] = {
+	{0x0E71BEA5, &WrapI_UU<_resolveMAC>,                               "_resolveMAC",                            'i', "xx"       },
+	{0x80C0A7AB, &WrapI_UU<_resolveIP>,                                "_resolveIP",                             'i', "xx"       },
+};
+
 // Return value: 0/0x80410005/0x80411301/error returned from sceNetAdhocctl_lib_F8BABD85[/error returned from sceUtilityGetSystemParamInt?]
 int sceNetAdhocDiscoverInitStart(u32 paramAddr) {
 	WARN_LOG_REPORT_ONCE(sceNetAdhocDiscoverInitStart, Log::sceNet, "UNIMPL sceNetAdhocDiscoverInitStart(%08x) at %08x", paramAddr, currentMIPS->pc);
@@ -5990,4 +6030,5 @@ void Register_sceNetAdhocDiscover() {
 
 void Register_sceNetAdhocctl() {
 	RegisterHLEModule("sceNetAdhocctl", ARRAY_SIZE(sceNetAdhocctl), sceNetAdhocctl);
+	RegisterHLEModule("sceNetAdhocctlInternal", ARRAY_SIZE(sceNetAdhocctlInternal), sceNetAdhocctlInternal);
 }
