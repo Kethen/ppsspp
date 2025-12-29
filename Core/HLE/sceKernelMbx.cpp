@@ -510,7 +510,7 @@ int sceKernelPollMbx(SceUID id, u32 packetAddrPtr)
 
 	if (!m)
 	{
-		ERROR_LOG(Log::sceKernel, "sceKernelPollMbx(%i, %08x): invalid mbx id", id, packetAddrPtr);
+		//ERROR_LOG(Log::sceKernel, "sceKernelPollMbx(%i, %08x): invalid mbx id", id, packetAddrPtr);
 		return error;
 	}
 
