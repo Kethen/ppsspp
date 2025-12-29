@@ -112,6 +112,9 @@ void InitMemorySizeForGame() {
 		gameID = g_paramSFO.GetValueString("DISC_ID");
 	}
 
+	// force large memory
+	UseLargeMem(1);
+
 	for (size_t i = 0; i < g_HDRemastersCount; i++) {
 		const auto &entry = g_HDRemasters[i];
 		if (entry.gameID != gameID) {
