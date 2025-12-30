@@ -262,6 +262,18 @@ bool Load_PSP_ISO(FileLoader *fileLoader, std::string *error_string) {
 
 	//in case we didn't go through EmuScreen::boot
 	g_Config.loadGameConfig(id, g_paramSFO.GetValueString("TITLE"));
+
+	// produce server.txt
+	char path_buf[1024] = {0};
+	sprintf(path_buf, "%s/PSP/PLUGINS/atpro/server.txt", g_Config.memStickDirectory.c_str());
+	FILE *f = fopen(path_buf, "w");
+	if (f != NULL){
+		fprintf(f, "%s", g_Config.proAdhocServer.c_str());
+		fclose(f);
+	}else{
+		ERROR_LOG(Log::Loader, "failed writing %s", path_buf);
+	}
+
 	System_PostUIMessage(UIMessage::CONFIG_LOADED);
 	INFO_LOG(Log::Loader, "Loading %s...", bootpath.c_str());
 	// TODO: We can't use the initial error_string pointer.
