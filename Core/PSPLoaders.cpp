@@ -268,14 +268,14 @@ bool Load_PSP_ISO(FileLoader *fileLoader, std::string *error_string) {
 	g_Config.LoadGameConfig(id);
 
 	// produce server.txt
-	char path_buf[1024] = {0};
-	sprintf(path_buf, "%s/PSP/PLUGINS/atpro/server.txt", g_Config.memStickDirectory.c_str());
-	FILE *f = fopen(path_buf, "w");
+	Path server_txt_path = GetSysDirectory(DIRECTORY_MEMSTICK_ROOT) / "PSP" / "PLUGINS" / "atpro" / "server.txt";
+	FILE *f = File::OpenCFile(server_txt_path, "wb");
+
 	if (f != NULL){
 		fprintf(f, "%s", g_Config.proAdhocServer.c_str());
 		fclose(f);
 	}else{
-		ERROR_LOG(Log::Loader, "failed writing %s", path_buf);
+		ERROR_LOG(Log::Loader, "failed opening %s for writing", server_txt_path.c_str());
 	}
 
 	System_PostUIMessage(UIMessage::CONFIG_LOADED);
