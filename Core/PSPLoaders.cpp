@@ -278,6 +278,17 @@ bool Load_PSP_ISO(FileLoader *fileLoader, std::string *error_string) {
 		ERROR_LOG(Log::Loader, "failed opening %s for writing", server_txt_path.c_str());
 	}
 
+	// produce port_offset.txt
+	Path port_offset_txt_path = GetSysDirectory(DIRECTORY_MEMSTICK_ROOT) / "PSP" / "PLUGINS" / "atpro" / "port_offset.txt";
+	f = File::OpenCFile(port_offset_txt_path, "wb");
+
+	if (f != NULL){
+		fprintf(f, "%d", g_Config.iPortOffset);
+		fclose(f);
+	}else{
+		ERROR_LOG(Log::Loader, "failed opening %s for writing", port_offset_txt_path.c_str());
+	}
+
 	System_PostUIMessage(UIMessage::CONFIG_LOADED);
 	INFO_LOG(Log::Loader, "Loading %s...", bootpath.c_str());
 	// TODO: We can't use the initial error_string pointer.
