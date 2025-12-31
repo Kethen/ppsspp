@@ -1905,6 +1905,40 @@ u32 sceKernelLoadModule(const char *name, u32 flags, u32 optionAddr) {
 		return hleLogError(Log::Loader, SCE_KERNEL_ERROR_ILLEGAL_ADDR, "bad filename");
 	}
 
+	char check_buf[1024] = {0};
+	for(int i = 0;;i++){
+		if (name[i] == '\0'){
+			check_buf[i] = '\0';
+			break;
+		}
+		check_buf[i] = tolower(name[i]);
+	}
+
+	if ((strstr(check_buf, "flash0") != NULL || strstr(check_buf, "disc0") != NULL) && (strstr(check_buf, "pspnet_adhoc.prx") != NULL || strstr(check_buf, "pspnet_adhoc_matching.prx") != NULL)){
+		// these should be loaded beforehand using aemu test loader, give the game a fake one to load and start
+		PSPModule *module = new PSPModule();
+		kernelObjects.Create(module);
+		loadedModules.insert(module->GetUID());
+		memset(&module->nm, 0, sizeof(module->nm));
+		module->isFake = true;
+		module->nm.entry_addr = -1;
+		module->nm.gp_value = -1;
+
+		u32 moduleSize = sizeof(module->nm);
+		char tag[32];
+		snprintf(tag, sizeof(tag), "SceModule-%d", module->nm.modid);
+		module->modulePtr.ptr = kernelMemory.Alloc(moduleSize, true, tag);
+
+		// Fill the struct.
+		if (module->modulePtr.IsValid()) {
+			*module->modulePtr = module->nm;
+			module->modulePtr.NotifyWrite("KernelModule");
+		}
+
+		// TODO: It would be more ideal to allocate memory for this module.
+		return hleLogInfo(Log::Loader, module->GetUID(), "created fake module");
+	}
+
 	for (size_t i = 0; i < ARRAY_SIZE(lieAboutSuccessModules); i++) {
 		if (!strcmp(name, lieAboutSuccessModules[i])) {
 			PSPModule *module = new PSPModule();
