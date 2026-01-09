@@ -692,6 +692,20 @@ SOURCES_CXX += \
 	  $(EXTDIR)/libadrenotools/lib/linkernsbypass/elf_soname_patcher.cpp
 endif
 
+SOURCES_C += \
+	       $(EXTDIR)/aemu_postoffice/client/postoffice.c
+
+ifeq ($(PLATFORM_EXT), win32)
+SOURCES_C += \
+	       $(EXTDIR)/aemu_postoffice/client/sock_impl_windows.c \
+	       $(EXTDIR)/aemu_postoffice/client/mutex_impl_windows.c
+else
+SOURCES_C += \
+	       $(EXTDIR)/aemu_postoffice/client/sock_impl_linux.c \
+	       $(EXTDIR)/aemu_postoffice/client/mutex_impl_linux.c
+endif
+
+
 SOURCES_CXX += \
            $(COMMONDIR)/Render/Text/draw_text.cpp \
 	       $(EXTDIR)/jpge/jpgd.cpp \
@@ -796,6 +810,7 @@ SOURCES_CXX += \
 	       $(COREDIR)/HLE/sceNet_lib.cpp \
 	       $(COREDIR)/HLE/NetAdhocCommon.cpp \
 	       $(COREDIR)/HLE/sceNetAdhoc.cpp \
+	       $(EXTDIR)/aemu_postoffice/client/delay_impl_ppsspp.cpp \
 	       $(COREDIR)/HLE/sceNetAdhocMatching.cpp \
 	       $(COREDIR)/HLE/sceNetApctl.cpp \
 	       $(COREDIR)/HLE/sceNetInet.cpp \
