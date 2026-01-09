@@ -1544,7 +1544,7 @@ static void *pdp_postoffice_recover(int idx){
 	getLocalMac(&local_mac);
 
 	int state;
-	internal->postoffice_handle = pdp_create_v4(&addr, (const char *)&local_mac, internal->data.pdp.lport, &state);
+	internal->postoffice_handle = pdp_create_v4(&addr, (const char *)&local_mac, internal->data.pdp.lport + portOffset, &state);
 	if (state != AEMU_POSTOFFICE_CLIENT_OK){
 		ERROR_LOG(Log::sceNet, "failed creating pdp socket on aemu postoffice library, %d", state);
 	}
@@ -1578,7 +1578,7 @@ static int pdp_send_postoffice_unicast(int idx, const char *daddr, uint16_t dpor
 			pdp_send_status = AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK;
 			break;
 		}
-		pdp_send_status = pdp_send(pdp_sock, daddr, dport, (char *)data, len, nonblock || timeout != 0);
+		pdp_send_status = pdp_send(pdp_sock, daddr, dport + portOffset, (char *)data, len, nonblock || timeout != 0);
 		if (pdp_send_status == AEMU_POSTOFFICE_CLIENT_SESSION_DEAD){
 			// let recovery deal with this
 			pdp_delete(pdp_sock);
@@ -1919,7 +1919,7 @@ static int pdp_recv_postoffice(int idx, void *saddr, void *sport, void *buf, voi
 
 	*(int32_t*)len = len_cpy;
 	if (sport != nullptr){
-		*(uint16_t *)sport = sport_cpy;
+		*(uint16_t *)sport = sport_cpy - portOffset;
 	}
 	if (saddr != nullptr){
 		memcpy(saddr, saddr_cpy, 6);
