@@ -54,6 +54,8 @@
 #include "Core/HLE/KernelWaitHelpers.h"
 #include "Core/HLE/NetAdhocCommon.h"
 
+#include "ext/aemu_postoffice/client/postoffice_client.h"
+
 #ifdef _WIN32
 #undef errno
 #define errno WSAGetLastError()
@@ -85,6 +87,8 @@ std::map<u64, AdhocSocketRequest> adhocSocketRequests;
 std::map<u64, AdhocSendTargets> sendTargetPeers;
 
 int gameModeNotifyEvent = -1;
+
+#define AEMU_POSTOFFICE_PORT 27313
 
 int AcceptPtpSocket(int ptpId, int newsocket, sockaddr_in& peeraddr, SceNetEtherAddr* addr, u16_le* port);
 int PollAdhocSocket(SceNetAdhocPollSd* sds, int count, int timeout, int nonblock);
@@ -1216,6 +1220,8 @@ u32 sceNetAdhocInit() {
 		// Since we are deleting GameMode Master here, we should probably need to make sure GameMode resources all cleared too.
 		deleteAllGMB();
 
+		aemu_post_office_init();
+
 		// Return Success
 		return hleLogInfo(Log::sceNet, 0, "at %08x", currentMIPS->pc);
 	}
@@ -1289,6 +1295,34 @@ int sceNetAdhocctlGetState(u32 ptrToStatus) {
 	return hleLogVerbose(Log::sceNet, 0, "state = %d", state);
 }
 
+static int pdp_create_postoffice(const SceNetEtherAddr *saddr, int sport, int bufsize){	
+	AdhocSocket *internal = (AdhocSocket*)malloc(sizeof(AdhocSocket));
+	if (internal == NULL){
+		return hleLogDebug(Log::sceNet, ERROR_NET_NO_SPACE, "net no space");
+	}
+
+	internal->postoffice_handle = NULL;
+	internal->data.pdp.laddr = *saddr;
+	internal->data.pdp.lport = sport;
+	internal->data.pdp.rcv_sb_cc = bufsize;
+
+	AdhocSocket **free_slot = NULL;
+	int i;
+	for(i = 0;i < 255; i++){
+		if(adhocSockets[i] == NULL){
+			free_slot = &adhocSockets[i];
+			break;
+		}
+	}
+	if (free_slot == NULL){
+		free(internal);
+		return hleLogDebug(Log::sceNet, ERROR_NET_NO_SPACE, "net no space");
+	}
+
+	*free_slot = internal;
+	return i + 1;
+}
+
 /**
  * Adhoc Emulator PDP Socket Creator
  * @param saddr Local MAC (Unused)
@@ -1330,6 +1364,9 @@ int sceNetAdhocPdpCreate(const char *mac, int port, int bufferSize, u32 flag) {
 			}
 			// Valid MAC supplied. FIXME: MAC only valid after successful attempt to Create/Connect/Join a Group? (ie. adhocctlCurrentMode != ADHOCCTL_MODE_NONE)
 			if ((adhocctlCurrentMode != ADHOCCTL_MODE_NONE) && isLocalMAC(saddr)) {
+				if (true) // TODO add config
+					return pdp_create_postoffice(saddr, port, bufferSize);
+
 				// Create Internet UDP Socket
 				// Socket is remapped through adhocSockets
 				int usocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -1486,6 +1523,106 @@ static int sceNetAdhocctlGetParameter(u32 paramAddr) {
 	return 0;
 }
 
+static void pdp_postoffice_delay(u32 us){
+	SceUID curThread = __KernelGetCurThread();
+	__KernelScheduleWakeup(curThread, us);
+	__KernelWaitCurThread(WAITTYPE_DELAY, curThread, 0, 0, false, "thread delayed");
+}
+
+static void *pdp_postoffice_recover(int idx){
+	AdhocSocket *internal = adhocSockets[idx];
+	if (internal->postoffice_handle != nullptr){
+		return internal->postoffice_handle;
+	}
+
+	struct aemu_post_office_sock_addr addr = {
+		.addr = g_adhocServerIP.in.sin_addr.s_addr,
+		.port = htons(AEMU_POSTOFFICE_PORT)
+	};
+
+	SceNetEtherAddr local_mac;
+	getLocalMac(&local_mac);
+
+	int state;
+	internal->postoffice_handle = pdp_create_v4(&addr, (const char *)&local_mac, internal->data.pdp.lport, &state);
+	if (state != AEMU_POSTOFFICE_CLIENT_OK){
+		ERROR_LOG(Log::sceNet, "failed creating pdp socket on aemu postoffice library, %d", state);
+	}
+	return internal->postoffice_handle;
+}
+
+static int pdp_send_postoffice_unicast(int idx, const char *daddr, uint16_t dport, const void *data, int len, uint32_t timeout, int nonblock){
+	AdhocSocket *internal = adhocSockets[idx];	
+
+	uint64_t begin = CoreTiming::GetGlobalTimeUsScaled();
+	uint64_t end = begin + timeout;
+
+	int pdp_send_status;
+	int recovery_cnt = 0;
+	while(1){
+		void *pdp_sock = pdp_postoffice_recover(idx);
+		if (pdp_sock == NULL){
+			if (!nonblock && timeout != 0 && CoreTiming::GetGlobalTimeUsScaled() < end){
+				pdp_postoffice_delay(100);
+				continue;
+			}
+			if (!nonblock && timeout == 0){
+				recovery_cnt++;
+				if (recovery_cnt == 100){
+					ERROR_LOG(Log::sceNet, "%s: server might be down, and game wants to perform blocking send, we're stuck until server comes back", __func__);
+				}
+				pdp_postoffice_delay(100);
+				continue;
+			}
+			// we can do recovery later
+			pdp_send_status = AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK;
+			break;
+		}
+		pdp_send_status = pdp_send(pdp_sock, daddr, dport, (char *)data, len, nonblock || timeout != 0);
+		if (pdp_send_status == AEMU_POSTOFFICE_CLIENT_SESSION_DEAD){
+			// let recovery deal with this
+			pdp_delete(pdp_sock);
+			internal->postoffice_handle = NULL;
+			pdp_postoffice_delay(100);
+			continue;
+		}
+		if (pdp_send_status == AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK && !nonblock && timeout != 0 && CoreTiming::GetGlobalTimeUsScaled() < end){
+			pdp_postoffice_delay(100);
+			continue;
+		}
+		break;
+	}
+
+	if (pdp_send_status == AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK){
+		if (nonblock){
+			return SCE_NET_ADHOC_ERROR_WOULD_BLOCK;
+		}else{
+			return SCE_NET_ADHOC_ERROR_TIMEOUT;
+		}
+	}
+	if (pdp_send_status == AEMU_POSTOFFICE_CLIENT_OUT_OF_MEMORY){
+		// this is critical
+		ERROR_LOG(Log::sceNet, "%s: critical: huge client buf %d what is going on please fix", __func__, len);
+	}
+
+	return 0;
+}
+
+static int pdp_send_postoffice(int idx, const char *daddr, uint16_t dport, const void *data, int len, uint32_t timeout, int nonblock){
+	if(!isBroadcastMAC((const SceNetEtherAddr *)daddr)){
+		return pdp_send_postoffice_unicast(idx, daddr, dport, data, len, timeout, nonblock);
+	}
+	peerlock.lock();
+	// Iterate Peers
+	SceNetAdhocctlPeerInfo* peer = friends;
+	for (; peer != NULL; peer = peer->next) {
+		// best effort
+		pdp_send_postoffice_unicast(idx, (const char *)&peer->mac_addr, dport, data, len, timeout, 1);
+	}
+	peerlock.unlock();
+	return 0;
+}
+
 /**
  * Adhoc Emulator PDP Send Call
  * @param id Socket File Descriptor
@@ -1530,6 +1667,9 @@ int sceNetAdhocPdpSend(int id, const char *mac, u32 port, void *data, int len, i
 					if (data != NULL) {
 						// Valid Destination Address
 						if (daddr != NULL && !isZeroMAC(daddr)) {
+							if (true) // TODO add config
+								return pdp_send_postoffice(id - 1, mac, port, data, len, timeout, flag);
+
 							// Log Destination
 							// Schedule Timeout Removal
 							//if (flag) timeout = 0;
@@ -1709,6 +1849,84 @@ int sceNetAdhocPdpSend(int id, const char *mac, u32 port, void *data, int len, i
 	return hleLogError(Log::sceNet, SCE_NET_ADHOC_ERROR_NOT_INITIALIZED, "not initialized");
 }
 
+static int pdp_recv_postoffice(int idx, void *saddr, void *sport, void *buf, void *len, uint32_t timeout, int nonblock){
+	AdhocSocket *internal = adhocSockets[idx];
+
+	uint64_t begin = CoreTiming::GetGlobalTimeUsScaled();
+	uint64_t end = begin + timeout;
+
+	// trim receive buffer size, library restricts pdp buffers to 2048
+	if (*(int32_t *)len > 2048){
+		*(int32_t *)len = 2048;
+	}
+
+	int sport_cpy = 0;
+	int len_cpy = 0;
+	char saddr_cpy[6];
+	int pdp_recv_status;
+	int recovery_cnt = 0;
+	while(1){
+		void *pdp_sock = pdp_postoffice_recover(idx);
+		if (pdp_sock == NULL){
+			if (!nonblock && timeout != 0 && CoreTiming::GetGlobalTimeUsScaled() < end){
+				pdp_postoffice_delay(100);
+				continue;
+			}
+			if (!nonblock && timeout == 0){
+				// we're basically stuck, oh no
+				recovery_cnt++;
+				if (recovery_cnt == 100){
+					ERROR_LOG(Log::sceNet, "%s: server might be down, and game wants to perform blocking recv, we're stuck until server comes back", __func__);
+				}
+				pdp_postoffice_delay(100);
+				continue;
+			}
+			// we're in timeout/nonblock mode, we can do recovery on next attempt
+			pdp_recv_status == AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK;
+			break;
+		}
+		len_cpy = *(int32_t*)len;
+		pdp_recv_status = pdp_recv(pdp_sock, saddr_cpy, &sport_cpy, (char *)buf, &len_cpy, nonblock || timeout != 0);
+		if (pdp_recv_status == AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK && !nonblock && timeout != 0 && CoreTiming::GetGlobalTimeUsScaled() < end){
+			pdp_postoffice_delay(100);
+			continue;
+		}
+		if (pdp_recv_status == AEMU_POSTOFFICE_CLIENT_SESSION_DEAD){
+			// let recovery logic handle this
+			pdp_delete(pdp_sock);
+			internal->postoffice_handle = NULL;
+			pdp_postoffice_delay(100);
+			continue;
+		}
+		break;
+	}
+
+	if (pdp_recv_status == AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK){
+		if (nonblock){
+			return SCE_NET_ADHOC_ERROR_WOULD_BLOCK;
+		}else{
+			return SCE_NET_ADHOC_ERROR_TIMEOUT;
+		}
+	}
+	if (pdp_recv_status == AEMU_POSTOFFICE_CLIENT_SESSION_DATA_TRUNC){
+		return SCE_NET_ADHOC_ERROR_NOT_ENOUGH_SPACE;
+	}
+	if (pdp_recv_status == AEMU_POSTOFFICE_CLIENT_OUT_OF_MEMORY){
+		// this is critical
+		ERROR_LOG(Log::sceNet, "%s: critical: huge client buf %d what is going on please fix", __func__, *(int32_t*)len);
+		len_cpy = 0;
+	}
+
+	*(int32_t*)len = len_cpy;
+	if (sport != nullptr){
+		*(uint16_t *)sport = sport_cpy;
+	}
+	if (saddr != nullptr){
+		memcpy(saddr, saddr_cpy, 6);
+	}
+	return 0;
+}
+
 /**
  * Adhoc Emulator PDP Receive Call
  * @param id Socket File Descriptor
@@ -1744,6 +1962,9 @@ int sceNetAdhocPdpRecv(int id, void *addr, void * port, void *buf, void *dataLen
 
 			// Valid Arguments
 			if (saddr != NULL && port != NULL && buf != NULL && len != NULL) {
+				if (true) // TODO add config
+					return pdp_recv_postoffice(id - 1, addr, port, buf, dataLength, timeout, flag);
+
 #ifndef PDP_DIRTY_MAGIC
 				// Schedule Timeout Removal
 				//if (flag == 1) timeout = 0;
@@ -2122,6 +2343,16 @@ int sceNetAdhocPollSocket(u32 socketStructAddr, int count, int timeout, int nonb
 	return hleLogDebug(Log::sceNet, SCE_NET_ADHOC_ERROR_NOT_INITIALIZED, "adhoc not initialized");
 }
 
+static int pdp_delete_postoffice(int idx){
+	void *pdp_socket = adhocSockets[idx]->postoffice_handle;
+	if (pdp_socket != NULL){
+		pdp_delete(pdp_socket);
+	}
+	free(adhocSockets[idx]);
+	adhocSockets[idx] = nullptr;
+	return 0;
+}
+
 int NetAdhocPdp_Delete(int id, int unknown) {
 	// Library is initialized
 	if (netAdhocInited) {
@@ -2132,6 +2363,9 @@ int NetAdhocPdp_Delete(int id, int unknown) {
 
 			// Valid Socket
 			if (sock != NULL && sock->type == SOCK_PDP) {
+				if (true) // TODO add config
+					pdp_delete_postoffice(id - 1);
+
 				// Close Connection
 				shutdown(sock->data.pdp.id, SD_RECEIVE);
 				closesocket(sock->data.pdp.id);
