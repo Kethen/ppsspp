@@ -1863,7 +1863,7 @@ static int pdp_recv_postoffice(int idx, void *saddr, void *sport, void *buf, voi
 	int sport_cpy = 0;
 	int len_cpy = 0;
 	char saddr_cpy[6];
-	int pdp_recv_status;
+	int pdp_recv_status = 0;
 	int recovery_cnt = 0;
 	while(1){
 		void *pdp_sock = pdp_postoffice_recover(idx);
@@ -4281,6 +4281,21 @@ static int sceNetAdhocPtpConnect(int id, int timeout, int flag) {
 	return NetAdhocPtp_Connect(id, timeout, flag);
 }
 
+static int ptp_close_postoffice(int idx){
+	AdhocSocket *internal = adhocSockets[idx];
+	void *socket = internal->postoffice_handle;
+	if (socket != NULL){
+		if (internal->data.ptp.state == ADHOC_PTP_STATE_ESTABLISHED){
+			ptp_close(socket);
+		}else if (internal->data.ptp.state == ADHOC_PTP_STATE_LISTEN){
+			ptp_listen_close(socket);
+		}
+	}
+	adhocSockets[idx] = NULL;
+	free(internal);
+	return 0;
+}
+
 int NetAdhocPtp_Close(int id, int unknown) {
 	// Library is initialized
 	if (netAdhocInited) {
@@ -4291,6 +4306,9 @@ int NetAdhocPtp_Close(int id, int unknown) {
 
 			// Valid Socket
 			if (socket != NULL && socket->type == SOCK_PTP) {
+				if (true) // TODO add config
+					return ptp_close_postoffice(id - 1);
+
 				// Close Connection
 				shutdown(socket->data.ptp.id, SD_RECEIVE);
 				closesocket(socket->data.ptp.id);
@@ -4559,6 +4577,38 @@ static int sceNetAdhocPtpListen(const char *srcmac, int sport, int bufsize, int 
 	return hleLogDebug(Log::sceNet, SCE_NET_ADHOC_ERROR_NOT_INITIALIZED, "adhoc not initialized");
 }
 
+static int ptp_send_postoffice(int idx, const void *data, int *len, uint32_t timeout, int nonblock){
+	uint64_t begin = CoreTiming::GetGlobalTimeUsScaled();
+	uint64_t end = begin + timeout;
+
+	int send_status;
+	while (1){
+		send_status = ptp_send(adhocSockets[idx]->postoffice_handle, (const char *)data, *len, nonblock || timeout != 0);
+		if (send_status == AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK){
+			if (nonblock){
+				return SCE_NET_ADHOC_ERROR_WOULD_BLOCK;
+			}else if (timeout != 0){
+				if (CoreTiming::GetGlobalTimeUsScaled() < end){
+					postoffice_delay(100);
+					continue;
+				}
+				return SCE_NET_ADHOC_ERROR_TIMEOUT;
+			}
+		}
+		if (send_status == AEMU_POSTOFFICE_CLIENT_SESSION_DEAD){
+			return SCE_NET_ADHOC_ERROR_DISCONNECTED;
+		}
+		if (send_status == AEMU_POSTOFFICE_CLIENT_OUT_OF_MEMORY){
+			// critical
+			ERROR_LOG(Log::sceNet, "%s: critical: client buffer way too big, %d, please debug this", __func__, *len);
+		}
+		break;
+	}
+
+	// the library currently sends in blocks, so there will not be partial sends
+	return 0;
+}
+
 /**
  * Adhoc Emulator PTP Sender
  * @param id Socket File Descriptor
@@ -4586,6 +4636,9 @@ static int sceNetAdhocPtpSend(int id, u32 dataAddr, u32 dataSizeAddr, int timeou
 			if (ptpsocket.state == ADHOC_PTP_STATE_ESTABLISHED || ptpsocket.state == ADHOC_PTP_STATE_SYN_SENT) {
 				// Valid Arguments
 				if (data != NULL && len != NULL && *len > 0) {
+					if (true) // TODO add config
+						return ptp_send_postoffice(id - 1, data, len, timeout, flag);
+
 					// Schedule Timeout Removal
 					//if (flag) timeout = 0; // JPCSP seems to always Send PTP as blocking, also a possibility to send to multiple destination?
 
@@ -4661,6 +4714,44 @@ static int sceNetAdhocPtpSend(int id, u32 dataAddr, u32 dataSizeAddr, int timeou
 	return hleLogError(Log::sceNet, SCE_NET_ADHOC_ERROR_NOT_INITIALIZED, "not initialized");
 }
 
+static int ptp_recv_postoffice(int idx, void *data, int *len, uint32_t timeout, int nonblock){
+	uint64_t begin = CoreTiming::GetGlobalTimeUsScaled();
+	uint64_t end = begin + timeout;
+
+	// trim send buffer to library limit
+	if (*len > 50 * 1024){
+		*len = 50 * 1024;
+	}
+
+	int send_status;
+	while (1){
+		send_status = ptp_recv(adhocSockets[idx]->postoffice_handle, (char *)data, len, nonblock || timeout != 0);
+		if (send_status == AEMU_POSTOFFICE_CLIENT_SESSION_WOULD_BLOCK){
+			if (nonblock){
+				return SCE_NET_ADHOC_ERROR_WOULD_BLOCK;
+			}else if (timeout != 0){
+				if (CoreTiming::GetGlobalTimeUsScaled() < end){
+					postoffice_delay(100);
+					continue;
+				}
+				return SCE_NET_ADHOC_ERROR_TIMEOUT;
+			}
+		}
+		if (send_status == AEMU_POSTOFFICE_CLIENT_SESSION_DEAD){
+			return SCE_NET_ADHOC_ERROR_DISCONNECTED;
+		}
+		if (send_status == AEMU_POSTOFFICE_CLIENT_OUT_OF_MEMORY){
+			// critical
+			ERROR_LOG(Log::sceNet, "%s: critical: client buffer way too big, %d, please debug this", __func__, *len);
+		}
+		break;
+	}
+
+	// AEMU_POSTOFFICE_CLIENT_OK / AEMU_POSTOFFICE_CLIENT_SESSION_DATA_TRUNC, we have a filled up len and buffer
+
+	return 0;
+}
+
 /**
  * Adhoc Emulator PTP Receiver
  * @param id Socket File Descriptor
@@ -4687,6 +4778,9 @@ static int sceNetAdhocPtpRecv(int id, u32 dataAddr, u32 dataSizeAddr, int timeou
 				socket->nonblocking = flag;
 
 				if (ptpsocket.state == ADHOC_PTP_STATE_ESTABLISHED || ptpsocket.state == ADHOC_PTP_STATE_SYN_SENT) {
+					if (true) // TODO add config
+						return ptp_recv_postoffice(id - 1, buf, len, timeout, flag);
+
 					// Schedule Timeout Removal
 					//if (flag) timeout = 0;
 
