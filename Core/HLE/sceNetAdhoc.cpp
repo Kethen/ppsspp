@@ -3509,6 +3509,43 @@ int RecreatePtpSocket(int ptpId) {
 	return 0;
 }
 
+static int ptp_open_postoffice(const SceNetEtherAddr *saddr, uint16_t sport, const SceNetEtherAddr *daddr, uint16_t dport, uint32_t bufsize){
+	AdhocSocket *internal = (AdhocSocket *)malloc(sizeof(AdhocSocket));
+	if (internal == NULL){
+		ERROR_LOG(Log::sceNet, "%s: ran out of heap memory trying to open ptp socket", __func__);
+		return ERROR_NET_NO_SPACE;
+	}
+
+	internal->type = SOCK_PTP;
+	internal->postoffice_handle = NULL;
+	internal->data.ptp.state = ADHOC_PTP_STATE_CLOSED;
+	internal->data.ptp.laddr = *saddr;
+	internal->data.ptp.lport = sport;
+	internal->data.ptp.paddr = *daddr;
+	internal->data.ptp.pport = dport;
+	internal->data.ptp.rcv_sb_cc = bufsize;
+	internal->data.ptp.snd_sb_cc = 0;
+
+	AdhocSocket **slot = NULL;
+	int i;
+	for(i = 0;i < MAX_SOCKET;i++){
+		if(adhocSockets[i] == NULL){
+			slot = &adhocSockets[i];
+			break;
+		}
+	}
+
+	if (slot == NULL){
+		free(internal);
+		ERROR_LOG(Log::sceNet, "%s: cannot find free socket mapper slot while opening ptp socket", __func__);
+		return ERROR_NET_NO_SPACE;
+	}
+
+	*slot = internal;
+
+	return i + 1;
+}
+
 /**
  * Adhoc Emulator PTP Active Socket Creator
  * @param saddr Local MAC (Unused)
@@ -3552,6 +3589,9 @@ static int sceNetAdhocPtpOpen(const char *srcmac, int sport, const char *dstmac,
 
 			// Valid Arguments
 			if (bufsize > 0 && rexmt_int > 0 && rexmt_cnt > 0) {
+				if (true) // TODO add config
+					return ptp_open_postoffice(saddr, sport, daddr, dport, bufsize);
+
 				// Create Infrastructure Socket (?)
 				// Socket is remapped through adhocSockets
 				int tcpsocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -4001,6 +4041,10 @@ static int sceNetAdhocPtpAccept(int id, u32 peerMacAddrPtr, u32 peerPortPtr, int
 				// Listener Socket
 				if (ptpsocket.state == ADHOC_PTP_STATE_LISTEN) {
 					hleEatMicro(50);
+
+					if (true) // TODO add config
+						return ptp_accept_postoffice(id - 1, addr, port, timeout, flag);
+
 					// Address Information
 					struct sockaddr_in peeraddr;
 					memset(&peeraddr, 0, sizeof(peeraddr));
@@ -4179,6 +4223,46 @@ int NetAdhocPtp_Connect(int id, int timeout, int flag, bool allowForcedConnect) 
 
 	// Library is uninitialized
 	return hleLogDebug(Log::sceNet, SCE_NET_ADHOC_ERROR_NOT_INITIALIZED, "not initialized");
+}
+
+static int ptp_connect_postoffice(int idx, uint32_t timeout, int nonblock){
+	uint64_t begin = CoreTiming::GetGlobalTimeUsScaled();
+	uint64_t end = begin + timeout;
+
+	struct aemu_post_office_sock_addr addr = {
+		.addr = g_adhocServerIP.in.sin_addr.s_addr,
+		.port = htons(AEMU_POSTOFFICE_PORT)
+	};
+
+	AdhocSocket *internal = adhocSockets[idx];
+	void *ptp_socket = NULL;
+
+	while(1){
+		int state;
+		ptp_socket = ptp_connect_v4(&addr, (const char *)&internal->data.ptp.laddr, internal->data.ptp.lport, (const char *)&internal->data.ptp.paddr, internal->data.ptp.pport, &state);
+		if (ptp_socket == NULL){
+			ERROR_LOG(Log::sceNet, "%s: failed connecting to ptp socket, %d", __func__, state);
+			if (nonblock){
+				return SCE_NET_ADHOC_ERROR_CONNECTION_REFUSED;
+			}else{
+				if (timeout == 0){
+					return SCE_NET_ADHOC_ERROR_CONNECTION_REFUSED;
+				}else{
+					if (CoreTiming::GetGlobalTimeUsScaled() < end){
+						postoffice_delay(100);
+						continue;
+					}
+					return SCE_NET_ADHOC_ERROR_TIMEOUT;
+				}
+			}
+		}
+		break;
+	}
+
+	// we got a new socket
+	internal->postoffice_handle = ptp_socket;
+	internal->data.ptp.state = ADHOC_PTP_STATE_ESTABLISHED;
+	return 0;
 }
 
 /**
