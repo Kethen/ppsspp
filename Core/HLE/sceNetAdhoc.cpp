@@ -3858,7 +3858,7 @@ static void *ptp_listen_postoffice_recover(int idx){
 	};
 
 	int state;
-	internal->postoffice_handle = ptp_listen_v4(&addr, (const char*)&internal->data.ptp.laddr, internal->data.ptp.lport, &state);
+	internal->postoffice_handle = ptp_listen_v4(&addr, (const char*)&internal->data.ptp.laddr, internal->data.ptp.lport + portOffset, &state);
 
 	if (state != AEMU_POSTOFFICE_CLIENT_OK){
 		ERROR_LOG(Log::sceNet, "%s: failed recovering ptp listen socket, %d", __func__, state);
@@ -3988,7 +3988,7 @@ static int ptp_accept_postoffice(int idx, SceNetEtherAddr *addr, uint16_t *port,
 		*addr = mac;
 	}
 	if (port != NULL){
-		*port = port_cpy;	
+		*port = port_cpy - portOffset;
 	}
 	return i + 1;
 }

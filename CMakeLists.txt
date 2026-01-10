@@ -2076,6 +2076,7 @@ set(GPU_SOURCES
 if(WIN32)
 	set(aemu_postoffice
 		ext/aemu_postoffice/client/postoffice.c
+		ext/aemu_postoffice/client/delay_impl_ppsspp.cpp
 		ext/aemu_postoffice/client/mutex_impl_windows.c
 		ext/aemu_postoffice/client/sock_impl_windows.c
 	)
@@ -2084,6 +2085,7 @@ endif()
 if(LINUX OR ANDROID OR MACOSX OR IOS)
 	set(aemu_postoffice
 		ext/aemu_postoffice/client/postoffice.c
+		ext/aemu_postoffice/client/delay_impl_ppsspp.cpp
 		ext/aemu_postoffice/client/mutex_impl_linux.c
 		ext/aemu_postoffice/client/sock_impl_linux.c
 	)
