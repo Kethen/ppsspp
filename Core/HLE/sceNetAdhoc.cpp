@@ -89,6 +89,7 @@ std::map<u64, AdhocSendTargets> sendTargetPeers;
 int gameModeNotifyEvent = -1;
 
 #define AEMU_POSTOFFICE_PORT 27313
+#define AEMU_POSTOFFICE_EAT_MICRO 50
 
 int AcceptPtpSocket(int ptpId, int newsocket, sockaddr_in& peeraddr, SceNetEtherAddr* addr, u16_le* port);
 int PollAdhocSocket(SceNetAdhocPollSd* sds, int count, int timeout, int nonblock);
@@ -1612,7 +1613,11 @@ static int pdp_send_postoffice_unicast(int idx, const char *daddr, uint16_t dpor
 
 static int pdp_send_postoffice(int idx, const char *daddr, uint16_t dport, const void *data, int len, uint32_t timeout, int nonblock){
 	if(!isBroadcastMAC((const SceNetEtherAddr *)daddr)){
-		return pdp_send_postoffice_unicast(idx, daddr, dport, data, len, timeout, nonblock);
+		int ret = pdp_send_postoffice_unicast(idx, daddr, dport, data, len, timeout, nonblock);
+		if (ret == 0){
+			hleEatMicro(AEMU_POSTOFFICE_EAT_MICRO);
+		}
+		return ret;
 	}
 	peerlock.lock();
 	// Iterate Peers
@@ -1622,6 +1627,7 @@ static int pdp_send_postoffice(int idx, const char *daddr, uint16_t dport, const
 		pdp_send_postoffice_unicast(idx, (const char *)&peer->mac_addr, dport, data, len, timeout, 1);
 	}
 	peerlock.unlock();
+	hleEatMicro(AEMU_POSTOFFICE_EAT_MICRO);
 	return 0;
 }
 
@@ -1910,7 +1916,9 @@ static int pdp_recv_postoffice(int idx, void *saddr, void *sport, void *buf, voi
 			return SCE_NET_ADHOC_ERROR_TIMEOUT;
 		}
 	}
+
 	if (pdp_recv_status == AEMU_POSTOFFICE_CLIENT_SESSION_DATA_TRUNC){
+		hleEatMicro(AEMU_POSTOFFICE_EAT_MICRO);
 		return SCE_NET_ADHOC_ERROR_NOT_ENOUGH_SPACE;
 	}
 	if (pdp_recv_status == AEMU_POSTOFFICE_CLIENT_OUT_OF_MEMORY){
@@ -1926,6 +1934,7 @@ static int pdp_recv_postoffice(int idx, void *saddr, void *sport, void *buf, voi
 	if (saddr != nullptr){
 		memcpy(saddr, saddr_cpy, 6);
 	}
+	hleEatMicro(AEMU_POSTOFFICE_EAT_MICRO);
 	return 0;
 }
 
@@ -4617,6 +4626,8 @@ static int ptp_send_postoffice(int idx, const void *data, int *len, uint32_t tim
 		break;
 	}
 
+	hleEatMicro(AEMU_POSTOFFICE_EAT_MICRO);
+
 	// the library currently sends in blocks, so there will not be partial sends
 	return 0;
 }
@@ -4760,6 +4771,8 @@ static int ptp_recv_postoffice(int idx, void *data, int *len, uint32_t timeout, 
 	}
 
 	// AEMU_POSTOFFICE_CLIENT_OK / AEMU_POSTOFFICE_CLIENT_SESSION_DATA_TRUNC, we have a filled up len and buffer
+
+	hleEatMicro(AEMU_POSTOFFICE_EAT_MICRO);
 
 	return 0;
 }
