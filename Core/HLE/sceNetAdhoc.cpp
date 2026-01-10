@@ -1318,7 +1318,7 @@ static int pdp_create_postoffice(const SceNetEtherAddr *saddr, int sport, int bu
 	}
 	if (free_slot == NULL){
 		free(internal);
-		return hleLogDebug(Log::sceNet, ERROR_NET_NO_SPACE, "net no space");
+		return ERROR_NET_NO_SPACE;
 	}
 
 	*free_slot = internal;
@@ -2366,7 +2366,7 @@ int NetAdhocPdp_Delete(int id, int unknown) {
 			// Valid Socket
 			if (sock != NULL && sock->type == SOCK_PDP) {
 				if (true) // TODO add config
-					pdp_delete_postoffice(id - 1);
+					return pdp_delete_postoffice(id - 1);
 
 				// Close Connection
 				shutdown(sock->data.pdp.id, SD_RECEIVE);
@@ -4124,7 +4124,7 @@ static int ptp_connect_postoffice(int idx, uint32_t timeout, int nonblock){
 
 	while(1){
 		int state;
-		ptp_socket = ptp_connect_v4(&addr, (const char *)&internal->data.ptp.laddr, internal->data.ptp.lport, (const char *)&internal->data.ptp.paddr, internal->data.ptp.pport, &state);
+		ptp_socket = ptp_connect_v4(&addr, (const char *)&internal->data.ptp.laddr, internal->data.ptp.lport + portOffset, (const char *)&internal->data.ptp.paddr, internal->data.ptp.pport + portOffset, &state);
 		if (ptp_socket == NULL){
 			ERROR_LOG(Log::sceNet, "%s: failed connecting to ptp socket, %d", __func__, state);
 			if (nonblock){
