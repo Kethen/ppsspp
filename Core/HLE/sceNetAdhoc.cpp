@@ -2183,6 +2183,24 @@ int sceNetAdhocSetSocketAlert(int id, int flag) {
 	return hleDelayResult(hleLogDebug(Log::sceNet, retval), "set socket alert delay", 1000);
 }
 
+static int get_postoffice_fd(AdhocSocket *internal){
+	void *socket = internal->postoffice_handle;
+	if (internal->type == SOCK_PTP){
+		if (socket != NULL){
+			if (internal->data.ptp.state == ADHOC_PTP_STATE_LISTEN){
+				return ptp_listen_get_native_sock(socket);
+			}else if (internal->data.ptp.state == ADHOC_PTP_STATE_ESTABLISHED){
+				return ptp_get_native_sock(socket);
+			}
+		}
+	}else{
+		if (socket != NULL){
+			return pdp_get_native_sock(socket);
+		}
+	}
+	return -1;
+}
+
 int PollAdhocSocket(SceNetAdhocPollSd* sds, int count, int timeout, int nonblock) {
 	//WSAPoll only available for Vista or newer, so we'll use an alternative way for XP since Windows doesn't have poll function like *NIX
 	fd_set readfds, writefds, exceptfds;
@@ -2198,12 +2216,22 @@ int PollAdhocSocket(SceNetAdhocPollSd* sds, int count, int timeout, int nonblock
 			if (!sock) {
 				return SCE_NET_ADHOC_ERROR_SOCKET_DELETED;
 			}
-			if (sock->type == SOCK_PTP) {
-				fd = sock->data.ptp.id;
+
+			if (true) { // TODO add config
+				int postoffice_fd = get_postoffice_fd(sock);
+				if (postoffice_fd == -1){
+					continue;
+				}
+				fd = postoffice_fd;
+			}else{
+				if (sock->type == SOCK_PTP) {
+					fd = sock->data.ptp.id;
+				}
+				else {
+					fd = sock->data.pdp.id;
+				}
 			}
-			else {
-				fd = sock->data.pdp.id;
-			}
+
 			if (fd > maxfd) maxfd = fd;
 			FD_SET(fd, &readfds);
 			FD_SET(fd, &writefds);
@@ -2219,11 +2247,20 @@ int PollAdhocSocket(SceNetAdhocPollSd* sds, int count, int timeout, int nonblock
 		for (int i = 0; i < count; i++) {
 			if (sds[i].id > 0 && sds[i].id <= MAX_SOCKET && adhocSockets[sds[i].id - 1] != NULL) {
 				auto sock = adhocSockets[sds[i].id - 1];
-				if (sock->type == SOCK_PTP) {
-					fd = sock->data.ptp.id;
-				}
-				else {
-					fd = sock->data.pdp.id;
+
+				if (true) { // TODO add config
+					int postoffice_fd = get_postoffice_fd(sock);
+					if (postoffice_fd == -1){
+						continue;
+					}
+					fd = postoffice_fd;
+				}else{
+					if (sock->type == SOCK_PTP) {
+						fd = sock->data.ptp.id;
+					}
+					else {
+						fd = sock->data.pdp.id;
+					}
 				}
 				if ((sds[i].events & ADHOC_EV_RECV) && FD_ISSET(fd, &readfds))
 					sds[i].revents |= ADHOC_EV_RECV;
@@ -3271,18 +3308,25 @@ static int sceNetAdhocGetPdpStat(u32 structSize, u32 structAddr) {
 					// Set available bytes to be received. With FIONREAD There might be ghosting 1 byte in recv buffer when remote peer's socket got closed (ie. Warriors Orochi 2) Attempting to recv this ghost 1 byte will result to socket error 10054 (may need to disable SIO_UDP_CONNRESET error)
 					// It seems real PSP respecting the socket buffer size arg, so we may need to cap the value up to the buffer size arg since we use larger buffer, for PDP/UDP the total size must not contains partial/truncated message to avoid data loss.
 					// TODO: We may need to manage PDP messages ourself by reading each msg 1-by-1 and moving it to our internal buffer(msg array) in order to calculate the correct messages size that can fit into buffer size when there are more than 1 messages in the recv buffer (simulate FIONREAD)
-					sock->data.pdp.rcv_sb_cc = getAvailToRecv(sock->data.pdp.id, sock->buffer_size);
-					// There might be a possibility for the data to be taken by the OS, thus FIONREAD returns 0, but can be Received
-					if (sock->data.pdp.rcv_sb_cc == 0) {
-						// Let's try to peek the data size
-						// TODO: May need to filter out packets from an IP that can't be translated to MAC address
-						struct sockaddr_in sin;
-						socklen_t sinlen;
-						sinlen = sizeof(sin);
-						memset(&sin, 0, sinlen);
-						int received = recvfrom(sock->data.pdp.id, dummyPeekBuf64k, std::min((u32)dummyPeekBuf64kSize, sock->buffer_size), MSG_PEEK | MSG_NOSIGNAL, (struct sockaddr*)&sin, &sinlen);
-						if (received > 0)
-							sock->data.pdp.rcv_sb_cc = received;
+					if (true) { // TODO add config
+						void *postoffice_handle = pdp_postoffice_recover(j);
+						if (postoffice_handle != NULL){
+							sock->data.pdp.rcv_sb_cc = pdp_peek_next_size(postoffice_handle);
+						}
+					}else{
+						sock->data.pdp.rcv_sb_cc = getAvailToRecv(sock->data.pdp.id, sock->buffer_size);
+						// There might be a possibility for the data to be taken by the OS, thus FIONREAD returns 0, but can be Received
+						if (sock->data.pdp.rcv_sb_cc == 0) {
+							// Let's try to peek the data size
+							// TODO: May need to filter out packets from an IP that can't be translated to MAC address
+							struct sockaddr_in sin;
+							socklen_t sinlen;
+							sinlen = sizeof(sin);
+							memset(&sin, 0, sinlen);
+							int received = recvfrom(sock->data.pdp.id, dummyPeekBuf64k, std::min((u32)dummyPeekBuf64kSize, sock->buffer_size), MSG_PEEK | MSG_NOSIGNAL, (struct sockaddr*)&sin, &sinlen);
+							if (received > 0)
+								sock->data.pdp.rcv_sb_cc = received;
+						}
 					}
 
 					// Copy Socket Data from Internal Memory
@@ -3381,16 +3425,24 @@ static int sceNetAdhocGetPtpStat(u32 structSize, u32 structAddr) {
 						}
 					}
 
-					// Set available bytes to be received
-					sock->data.ptp.rcv_sb_cc = getAvailToRecv(sock->data.ptp.id);
-					// It seems real PSP respecting the socket buffer size arg, so we may need to cap the value to the buffer size arg since we use larger buffer
-					sock->data.ptp.rcv_sb_cc = std::min(sock->data.ptp.rcv_sb_cc, (u32_le)sock->buffer_size);
-					// There might be a possibility for the data to be taken by the OS, thus FIONREAD returns 0, but can be Received
-					if (sock->data.ptp.rcv_sb_cc == 0) {
-						// Let's try to peek the data size
-						int received = recv(sock->data.ptp.id, dummyPeekBuf64k, std::min((u32)dummyPeekBuf64kSize, sock->buffer_size), MSG_PEEK | MSG_NOSIGNAL);
-						if (received > 0)
-							sock->data.ptp.rcv_sb_cc = received;
+					if (true) { // TODO add config
+						if (sock->postoffice_handle != NULL){
+							sock->data.ptp.rcv_sb_cc = ptp_peek_next_size(sock->postoffice_handle);
+						}else{
+							sock->data.ptp.rcv_sb_cc = 0;
+						}
+					}else{
+						// Set available bytes to be received
+						sock->data.ptp.rcv_sb_cc = getAvailToRecv(sock->data.ptp.id);
+						// It seems real PSP respecting the socket buffer size arg, so we may need to cap the value to the buffer size arg since we use larger buffer
+						sock->data.ptp.rcv_sb_cc = std::min(sock->data.ptp.rcv_sb_cc, (u32_le)sock->buffer_size);
+						// There might be a possibility for the data to be taken by the OS, thus FIONREAD returns 0, but can be Received
+						if (sock->data.ptp.rcv_sb_cc == 0) {
+							// Let's try to peek the data size
+							int received = recv(sock->data.ptp.id, dummyPeekBuf64k, std::min((u32)dummyPeekBuf64kSize, sock->buffer_size), MSG_PEEK | MSG_NOSIGNAL);
+							if (received > 0)
+								sock->data.ptp.rcv_sb_cc = received;
+						}
 					}
 
 					// Copy Socket Data from internal Memory
