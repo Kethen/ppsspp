@@ -1301,10 +1301,12 @@ static int pdp_create_postoffice(const SceNetEtherAddr *saddr, int sport, int bu
 		return hleLogDebug(Log::sceNet, ERROR_NET_NO_SPACE, "net no space");
 	}
 
+	internal->type = SOCK_PDP;
 	internal->postoffice_handle = NULL;
 	internal->data.pdp.laddr = *saddr;
 	internal->data.pdp.lport = sport;
 	internal->data.pdp.rcv_sb_cc = bufsize;
+	internal->flags = 0;
 
 	AdhocSocket **free_slot = NULL;
 	int i;
@@ -3525,6 +3527,7 @@ static int ptp_open_postoffice(const SceNetEtherAddr *saddr, uint16_t sport, con
 	internal->data.ptp.pport = dport;
 	internal->data.ptp.rcv_sb_cc = bufsize;
 	internal->data.ptp.snd_sb_cc = 0;
+	internal->flags = 0;
 
 	AdhocSocket **slot = NULL;
 	int i;
@@ -3961,6 +3964,7 @@ static int ptp_accept_postoffice(int idx, SceNetEtherAddr *addr, uint16_t *port,
 	internal->data.ptp.state = ADHOC_PTP_STATE_ESTABLISHED;
 	internal->data.ptp.rcv_sb_cc = adhocSockets[idx]->data.ptp.rcv_sb_cc;
 	internal->data.ptp.snd_sb_cc = adhocSockets[idx]->data.ptp.snd_sb_cc;
+	internal->flags = 0;
 
 	AdhocSocket **slot = NULL;
 	int i;
@@ -4102,12 +4106,59 @@ static int sceNetAdhocPtpAccept(int id, u32 peerMacAddrPtr, u32 peerPortPtr, int
 	return hleLogVerbose(Log::sceNet, SCE_NET_ADHOC_ERROR_NOT_INITIALIZED, "not initialized");
 }
 
+static int ptp_connect_postoffice(int idx, uint32_t timeout, int nonblock){
+	AdhocSocket *internal = adhocSockets[idx];
+	// Phantasy Star Portable 2 will try to reconnect even when previous connect already success, so we should return success too if it's already connected
+	if (internal->data.ptp.state == ADHOC_PTP_STATE_ESTABLISHED)
+		return 0;
+
+	uint64_t begin = CoreTiming::GetGlobalTimeUsScaled();
+	uint64_t end = begin + timeout;
+
+	struct aemu_post_office_sock_addr addr = {
+		.addr = g_adhocServerIP.in.sin_addr.s_addr,
+		.port = htons(AEMU_POSTOFFICE_PORT)
+	};
+
+	void *ptp_socket = NULL;
+
+	while(1){
+		int state;
+		ptp_socket = ptp_connect_v4(&addr, (const char *)&internal->data.ptp.laddr, internal->data.ptp.lport, (const char *)&internal->data.ptp.paddr, internal->data.ptp.pport, &state);
+		if (ptp_socket == NULL){
+			ERROR_LOG(Log::sceNet, "%s: failed connecting to ptp socket, %d", __func__, state);
+			if (nonblock){
+				return SCE_NET_ADHOC_ERROR_CONNECTION_REFUSED;
+			}else{
+				if (timeout == 0){
+					return SCE_NET_ADHOC_ERROR_CONNECTION_REFUSED;
+				}else{
+					if (CoreTiming::GetGlobalTimeUsScaled() < end){
+						postoffice_delay(100);
+						continue;
+					}
+					return SCE_NET_ADHOC_ERROR_TIMEOUT;
+				}
+			}
+		}
+		break;
+	}
+
+	// we got a new socket
+	internal->postoffice_handle = ptp_socket;
+	internal->data.ptp.state = ADHOC_PTP_STATE_ESTABLISHED;
+	return 0;
+}
+
 int NetAdhocPtp_Connect(int id, int timeout, int flag, bool allowForcedConnect) {
 	// Library is initialized
 	if (netAdhocInited)
 	{
 		// Valid Socket
 		if (id > 0 && id <= MAX_SOCKET && adhocSockets[id - 1] != NULL) {
+			if (true) // TODO add config
+				return ptp_connect_postoffice(id - 1, timeout, flag);
+
 			// Cast Socket
 			auto socket = adhocSockets[id - 1];
 			auto& ptpsocket = socket->data.ptp;
@@ -4225,46 +4276,6 @@ int NetAdhocPtp_Connect(int id, int timeout, int flag, bool allowForcedConnect) 
 	return hleLogDebug(Log::sceNet, SCE_NET_ADHOC_ERROR_NOT_INITIALIZED, "not initialized");
 }
 
-static int ptp_connect_postoffice(int idx, uint32_t timeout, int nonblock){
-	uint64_t begin = CoreTiming::GetGlobalTimeUsScaled();
-	uint64_t end = begin + timeout;
-
-	struct aemu_post_office_sock_addr addr = {
-		.addr = g_adhocServerIP.in.sin_addr.s_addr,
-		.port = htons(AEMU_POSTOFFICE_PORT)
-	};
-
-	AdhocSocket *internal = adhocSockets[idx];
-	void *ptp_socket = NULL;
-
-	while(1){
-		int state;
-		ptp_socket = ptp_connect_v4(&addr, (const char *)&internal->data.ptp.laddr, internal->data.ptp.lport, (const char *)&internal->data.ptp.paddr, internal->data.ptp.pport, &state);
-		if (ptp_socket == NULL){
-			ERROR_LOG(Log::sceNet, "%s: failed connecting to ptp socket, %d", __func__, state);
-			if (nonblock){
-				return SCE_NET_ADHOC_ERROR_CONNECTION_REFUSED;
-			}else{
-				if (timeout == 0){
-					return SCE_NET_ADHOC_ERROR_CONNECTION_REFUSED;
-				}else{
-					if (CoreTiming::GetGlobalTimeUsScaled() < end){
-						postoffice_delay(100);
-						continue;
-					}
-					return SCE_NET_ADHOC_ERROR_TIMEOUT;
-				}
-			}
-		}
-		break;
-	}
-
-	// we got a new socket
-	internal->postoffice_handle = ptp_socket;
-	internal->data.ptp.state = ADHOC_PTP_STATE_ESTABLISHED;
-	return 0;
-}
-
 /**
  * Adhoc Emulator PTP Connection Opener
  * @param id Socket File Descriptor
@@ -4353,7 +4364,7 @@ static int sceNetAdhocPtpClose(int id, int unknown) {
 	return NetAdhocPtp_Close(id, unknown);
 }
 
-static int ptp_listen_postoffice(const char *saddr, uint16_t sport, uint32_t bufsize){
+static int ptp_listen_postoffice(const SceNetEtherAddr *saddr, uint16_t sport, uint32_t bufsize){
 	// server connect delegated to accept
 	AdhocSocket *internal = (AdhocSocket *)malloc(sizeof(AdhocSocket));
 	if (internal == NULL){
@@ -4363,11 +4374,12 @@ static int ptp_listen_postoffice(const char *saddr, uint16_t sport, uint32_t buf
 
 	internal->postoffice_handle = NULL;
 	internal->type = SOCK_PTP;
-	memcpy(&internal->data.ptp.laddr, saddr, 6);
+	internal->data.ptp.laddr = *saddr;
 	internal->data.ptp.lport = sport;
 	internal->data.ptp.state = ADHOC_PTP_STATE_LISTEN;
 	internal->data.ptp.rcv_sb_cc = bufsize;
 	internal->data.ptp.snd_sb_cc = 0;
+	internal->flags = 0;
 
 	AdhocSocket **slot = NULL;
 	int i;
@@ -4432,7 +4444,7 @@ static int sceNetAdhocPtpListen(const char *srcmac, int sport, int bufsize, int 
 			if (bufsize > 0 && rexmt_int > 0 && rexmt_cnt > 0 && backlog > 0)
 			{
 				if (true) // TODO add config
-					return ptp_listen_postoffice(srcmac, sport, bufsize);
+					return ptp_listen_postoffice(saddr, sport, bufsize);
 
 				// Create Infrastructure Socket (?)
 				// Socket is remapped through adhocSockets
