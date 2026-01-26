@@ -272,7 +272,7 @@ bool Load_PSP_ISO(FileLoader *fileLoader, std::string *error_string) {
 	FILE *f = File::OpenCFile(server_txt_path, "wb");
 
 	if (f != NULL){
-		fprintf(f, "%s", g_Config.proAdhocServer.c_str());
+		fprintf(f, "%s", g_Config.sProAdhocServer.c_str());
 		fclose(f);
 	}else{
 		ERROR_LOG(Log::Loader, "failed opening %s for writing", server_txt_path.c_str());
