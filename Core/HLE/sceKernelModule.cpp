@@ -97,20 +97,20 @@ struct lieModuleEntry {
 // This is a workaround for misbehaving homebrew (like TBL's Suicide Barbie (Final)) and games (like Drive 76).
 // In the case of Driver 76, it uses sceKernelGetModuleIdList and sceKernelQueryModuleInfo to check if adhoc modules are loaded
 static const struct lieModuleEntry lieAboutSuccessModules[] = {
-	{ .path = "flash0:/kd/audiocodec.prx", .name = "sceAudiocodec_Driver" },
-	{ .path = "flash0:/kd/audiocodec_260.prx", .name = "sceAudiocodec_Driver" },
-	{ .path = "flash0:/kd/libatrac3plus.prx", .name = "sceATRAC3plus_Library" },
-	{ .path = "disc0:/PSP_GAME/SYSDIR/UPDATE/EBOOT.BIN", .name = "" },
-	{ .path = "flash0:/kd/ifhandle.prx", .name = "sceNet_Service" },
-	{ .path = "flash0:/kd/pspnet.prx", .name = "sceNet_Library" },
-	{ .path = "flash0:/kd/pspnet_inet.prx", .name = "sceNetInet_Library" },
-	{ .path = "flash0:/kd/pspnet_apctl.prx", .name = "sceNetApctl_Library" },
-	{ .path = "flash0:/kd/pspnet_resolver.prx", .name = "sceNetResolver_Library" },
-	{ .path = "flash0:/kd/pspnet_adhoc.prx", .name = "sceNetAdhoc_Library" },
-	{ .path = "flash0:/kd/pspnet_adhocctl.prx", .name = "sceNetAdhocctl_Library" },
-	{ .path = "flash0:/kd/pspnet_adhoc_matching.prx", .name = "sceNetAdhocMatching_Library" },
-	{ .path = "flash0:/kd/pspnet_adhoc_download.prx", .name = "sceNetAdhocDownload_Library" },
-	{ .path = "flash0:/kd/pspnet_adhoc_discover.prx", .name = "sceNetAdhocDiscover_Library" },
+	{ "flash0:/kd/audiocodec.prx", "sceAudiocodec_Driver" },
+	{ "flash0:/kd/audiocodec_260.prx", "sceAudiocodec_Driver" },
+	{ "flash0:/kd/libatrac3plus.prx", "sceATRAC3plus_Library" },
+	{ "disc0:/PSP_GAME/SYSDIR/UPDATE/EBOOT.BIN", "" },
+	{ "flash0:/kd/ifhandle.prx", "sceNet_Service" },
+	{ "flash0:/kd/pspnet.prx", "sceNet_Library" },
+	{ "flash0:/kd/pspnet_inet.prx", "sceNetInet_Library" },
+	{ "flash0:/kd/pspnet_apctl.prx", "sceNetApctl_Library" },
+	{ "flash0:/kd/pspnet_resolver.prx", "sceNetResolver_Library" },
+	{ "flash0:/kd/pspnet_adhoc.prx", "sceNetAdhoc_Library" },
+	{ "flash0:/kd/pspnet_adhocctl.prx", "sceNetAdhocctl_Library" },
+	{ "flash0:/kd/pspnet_adhoc_matching.prx", "sceNetAdhocMatching_Library" },
+	{ "flash0:/kd/pspnet_adhoc_download.prx", "sceNetAdhocDownload_Library" },
+	{ "flash0:/kd/pspnet_adhoc_discover.prx", "sceNetAdhocDiscover_Library" },
 };
 
 static const bool liedAboutThisModule(PSPModule *mod) {
