@@ -1320,7 +1320,7 @@ static u32 sceUtilityLoadNetModule(u32 module) {
 		mod_list.push_back("flash0:/kd/pspnet_adhoc_discover.prx");
 	}
 
-	for (const char *mod_path : mod_list){
+	for (const char *mod_path : mod_list) {
 		u32 modid = hleCall(ModuleMgrForUser, u32, sceKernelLoadModule, mod_path, 0, 0);
 		if (modid >= 0) {
 			hleCall(ModuleMgrForUser, u32, sceKernelStartModule, modid, 0, 0, 0, 0);
