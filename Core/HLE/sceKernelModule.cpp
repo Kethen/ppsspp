@@ -89,18 +89,38 @@ enum : u32 {
 	NID_MODULE_SDK_VERSION = 0x11B97506,
 };
 
-// This is a workaround for misbehaving homebrew (like TBL's Suicide Barbie (Final)).
-static const char * const lieAboutSuccessModules[] = {
-	"flash0:/kd/audiocodec.prx",
-	"flash0:/kd/audiocodec_260.prx",
-	"flash0:/kd/libatrac3plus.prx",
-	"disc0:/PSP_GAME/SYSDIR/UPDATE/EBOOT.BIN",
-	"flash0:/kd/ifhandle.prx",
-	"flash0:/kd/pspnet.prx",
-	"flash0:/kd/pspnet_inet.prx",
-	"flash0:/kd/pspnet_apctl.prx",
-	"flash0:/kd/pspnet_resolver.prx",
+struct lieModuleEntry {
+	const char *path;
+	const char *name;
 };
+
+// This is a workaround for misbehaving homebrew (like TBL's Suicide Barbie (Final)) and games (like Drive 76).
+// In the case of Driver 76, it uses sceKernelGetModuleIdList and sceKernelQueryModuleInfo to check if adhoc modules are loaded
+static const struct lieModuleEntry lieAboutSuccessModules[] = {
+	{ .path = "flash0:/kd/audiocodec.prx", .name = "sceAudiocodec_Driver" },
+	{ .path = "flash0:/kd/audiocodec_260.prx", .name = "sceAudiocodec_Driver" },
+	{ .path = "flash0:/kd/libatrac3plus.prx", .name = "sceATRAC3plus_Library" },
+	{ .path = "disc0:/PSP_GAME/SYSDIR/UPDATE/EBOOT.BIN", .name = "" },
+	{ .path = "flash0:/kd/ifhandle.prx", .name = "sceNet_Service" },
+	{ .path = "flash0:/kd/pspnet.prx", .name = "sceNet_Library" },
+	{ .path = "flash0:/kd/pspnet_inet.prx", .name = "sceNetInet_Library" },
+	{ .path = "flash0:/kd/pspnet_apctl.prx", .name = "sceNetApctl_Library" },
+	{ .path = "flash0:/kd/pspnet_resolver.prx", .name = "sceNetResolver_Library" },
+	{ .path = "flash0:/kd/pspnet_adhoc.prx", .name = "sceNetAdhoc_Library" },
+	{ .path = "flash0:/kd/pspnet_adhocctl.prx", .name = "sceNetAdhocctl_Library" },
+	{ .path = "flash0:/kd/pspnet_adhoc_matching.prx", .name = "sceNetAdhocMatching_Library" },
+	{ .path = "flash0:/kd/pspnet_adhoc_download.prx", .name = "sceNetAdhocDownload_Library" },
+	{ .path = "flash0:/kd/pspnet_adhoc_discover.prx", .name = "sceNetAdhocDiscover_Library" },
+};
+
+static const bool liedAboutThisModule(PSPModule *mod) {
+	for (int i = 0 ; i < ARRAY_SIZE(lieAboutSuccessModules) ; i++) {
+		if (strcmp(lieAboutSuccessModules[i].name, mod->GetName()) == 0){
+			return true;
+		}
+	}
+	return false;
+}
 
 const char *NativeModuleStatusToString(NativeModuleStatus status) {
 	switch (status) {
@@ -1908,11 +1928,12 @@ u32 sceKernelLoadModule(const char *name, u32 flags, u32 optionAddr) {
 	}
 
 	for (size_t i = 0; i < ARRAY_SIZE(lieAboutSuccessModules); i++) {
-		if (!strcmp(name, lieAboutSuccessModules[i])) {
+		if (!strcmp(name, lieAboutSuccessModules[i].path)) {
 			PSPModule *module = new PSPModule();
 			kernelObjects.Create(module);
 			loadedModules.insert(module->GetUID());
 			memset(&module->nm, 0, sizeof(module->nm));
+			strcpy(module->nm.name, lieAboutSuccessModules[i].name);
 			module->isFake = true;
 			module->nm.entry_addr = -1;
 			module->nm.gp_value = -1;
@@ -2067,7 +2088,7 @@ int __KernelStartModule(SceUID moduleId, u32 argsize, u32 argAddr, u32 returnVal
 	return moduleId;
 }
 
-static u32 sceKernelStartModule(u32 moduleId, u32 argsize, u32 argAddr, u32 returnValueAddr, u32 optionAddr) {
+u32 sceKernelStartModule(u32 moduleId, u32 argsize, u32 argAddr, u32 returnValueAddr, u32 optionAddr) {
 	u32 error;
 	PSPModule *module = kernelObjects.Get<PSPModule>(moduleId, error);
 	if (!module) {
@@ -2578,7 +2599,7 @@ static u32 sceKernelGetModuleIdList(u32 resultBuffer, u32 resultBufferSize, u32 
 	u32 error;
 	for (SceUID moduleId : loadedModules) {
 		PSPModule *module = kernelObjects.Get<PSPModule>(moduleId, error);
-		if (!module->isFake) {
+		if (!module->isFake || liedAboutThisModule(module)) {
 			if (resultBufferOffset < resultBufferSize) {
 				Memory::Write_U32(module->GetUID(), resultBuffer + resultBufferOffset);
 				resultBufferOffset += 4;
