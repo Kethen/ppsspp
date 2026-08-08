@@ -497,6 +497,9 @@ static int getDisplayNumber(void) {
 	return displayNumber;
 }
 
+static void InitSDLAudioDevice(const std::string &name = "", bool subsystem_rebooted = false);
+static void StopSDLAudioDevice();
+
 static void sdl_mixaudio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount) {
 	(void)total_amount;
 	if (additional_amount <= 0) {
@@ -510,14 +513,19 @@ static void sdl_mixaudio_callback(void *userdata, SDL_AudioStream *stream, int a
 
 	std::vector<int16_t> mixBuf(frames * 2);
 	NativeMix(mixBuf.data(), frames, g_sampleRate, userdata);
-	SDL_PutAudioStreamData(stream, mixBuf.data(), (int)(mixBuf.size() * sizeof(int16_t)));
+	bool put_result = SDL_PutAudioStreamData(stream, mixBuf.data(), (int)(mixBuf.size() * sizeof(int16_t)));
+	if (!put_result) {
+		ERROR_LOG(Log::Audio, "SDL_PutAudioStreamData failed, restarting audio");
+		StopSDLAudioDevice();
+		InitSDLAudioDevice();
+	}
 }
 
 static SDL_AudioDeviceID audioDev = 0;
 static SDL_AudioStream *audioStream = nullptr;
 
 // Must be called after NativeInit().
-static void InitSDLAudioDevice(const std::string &name = "") {
+static void InitSDLAudioDevice(const std::string &name, bool subsystem_rebooted) {
 	SDL_AudioSpec fmt{};
 	fmt.freq = g_sampleRate;
 	fmt.format = SDL_AUDIO_S16;
@@ -532,6 +540,15 @@ static void InitSDLAudioDevice(const std::string &name = "") {
 	int deviceCount = 0;
 	SDL_AudioDeviceID *devices = SDL_GetAudioPlaybackDevices(&deviceCount);
 	SDL_AudioDeviceID chosenDevice = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+
+	if ((!devices || deviceCount == 0) && !subsystem_rebooted) {
+		if (devices) {
+			SDL_free(devices);
+		}
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		SDL_InitSubSystem(SDL_INIT_AUDIO);
+		return InitSDLAudioDevice(name, true);
+	}
 
 	// List available audio devices before trying to open, for debugging purposes.
 	if (deviceCount > 0 && devices) {
