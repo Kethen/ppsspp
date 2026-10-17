@@ -2039,7 +2039,6 @@ int sceNetAdhocctlInit(int stackSize, int prio, u32 productAddr) {
 
 	adhocctlEvents.clear();
 	netAdhocctlInited = true; //needed for cleanup during AdhocctlTerm even when it failed to connect to Adhoc Server (since it's being faked as success)
-	g_adhocServerLoginFailed = false;
 	isAdhocctlNeedLogin = true;
 
 	// Create fake PSP Thread for callback
@@ -3235,7 +3234,6 @@ int sceNetAdhocctlScan() {
 		// Only scan when in Disconnected state, otherwise AdhocServer will kick you out
 		if (adhocctlState == ADHOCCTL_STATE_DISCONNECTED && !isAdhocctlBusy) {
 			isAdhocctlBusy = true;
-			g_adhocServerLoginFailed = false;
 			isAdhocctlNeedLogin = true;
 			adhocctlState = ADHOCCTL_STATE_SCANNING;
 			adhocctlCurrentMode = ADHOCCTL_MODE_NORMAL;
@@ -3728,7 +3726,6 @@ int NetAdhocctl_Create(const char *groupName) {
 			// Disconnected State
 			if (adhocctlState == ADHOCCTL_STATE_DISCONNECTED && !isAdhocctlBusy) {
 				isAdhocctlBusy = true;
-				g_adhocServerLoginFailed = false;
 				isAdhocctlNeedLogin = true;
 
 				// Set Network Name

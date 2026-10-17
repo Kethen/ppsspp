@@ -1380,8 +1380,6 @@ void killAdhocctlClient(bool due_to_error) {
 	auto n = GetI18NCategory(I18NCat::NETWORKING);
 	if (due_to_error) {
 		g_OSD.Show(OSDType::MESSAGE_ERROR, std::string(n->T("Disconnected from AdhocServer")));
-		// sceNetAdhocctlScan & Create puts this back to true, which will trigger retry
-		g_adhocServerLoginFailed = true;
 	}
 
 	g_adhocServerConnected = false;
@@ -1456,7 +1454,6 @@ int friendFinder() {
 					netAdhocGameModeEntered = false;
 					isAdhocctlBusy = false;
 				} else {
-					g_adhocServerLoginFailed = true;
 					g_adhocServerConnected = false;
 				}
 			}
@@ -1464,6 +1461,14 @@ int friendFinder() {
 
 		// sceNetAdhocctlScan & Create puts this back to true, which will trigger retry
 		isAdhocctlNeedLogin = false;
+
+		now = time_now_d() * 1000000.0; // Use time_now_d()*1000000.0 instead of CoreTiming::GetGlobalTimeUsScaled() if the game gets disconnected from AdhocServer too soon when FPS wasn't stable
+
+		// Calculate EnterGameMode Timeout to prevent waiting forever for disconnected players
+		if (isAdhocctlBusy && adhocctlState == ADHOCCTL_STATE_DISCONNECTED && adhocctlCurrentMode == ADHOCCTL_MODE_GAMEMODE && netAdhocGameModeEntered && static_cast<s64>(now - adhocctlStartTime) > netAdhocEnterGameModeTimeout) {
+			netAdhocGameModeEntered = false;
+			notifyAdhocctlHandlers(ADHOCCTL_EVENT_ERROR, SCE_NET_ADHOC_ERROR_TIMEOUT);
+		}
 
 		auto friend_finder_wait = [] {
 			// This delay time should be 100ms when there is an event otherwise 500ms ?
@@ -1475,51 +1480,45 @@ int friendFinder() {
 			}
 		};
 
-		if (!g_adhocServerConnected) {
+		adhocctlMutex.lock();
+		if (!adhocctlHandle) {
+			adhocctlMutex.unlock();
 			friend_finder_wait();
 			continue;
 		}
+		adhocctlMutex.unlock();
 
-		// Ping Server
-		now = time_now_d() * 1000000.0; // Use time_now_d()*1000000.0 instead of CoreTiming::GetGlobalTimeUsScaled() if the game gets disconnected from AdhocServer too soon when FPS wasn't stable
-		// original code : ((sceKernelGetSystemTimeWide() - lastping) >= ADHOCCTL_PING_TIMEOUT)
-		if (static_cast<s64>(now - lastping) >= PSP_ADHOCCTL_PING_TIMEOUT) { // We may need to use lower interval to prevent getting timeout at Pro Adhoc Server through internet
+		struct adhocctl_event adhocctl_event;
+		{
+			// we only want a lock until an event is fetched, so that we don't hold adhocctl & peer the same time and rig outselves into weird hold and wait down the road
 			const std::lock_guard<std::mutex> adhocctl_guard(adhocctlMutex);
-			enum adhocctl_call_status ping_status = adhocctl_ping(adhocctlHandle);
+			// Ping Server
+			// original code : ((sceKernelGetSystemTimeWide() - lastping) >= ADHOCCTL_PING_TIMEOUT)
+			if (static_cast<s64>(now - lastping) >= PSP_ADHOCCTL_PING_TIMEOUT) { // We may need to use lower interval to prevent getting timeout at Pro Adhoc Server through internet
+				enum adhocctl_call_status ping_status = adhocctl_ping(adhocctlHandle);
 
-			if (ping_status != ADHOCCTL_CALL_SUCCESS) {
-				ERROR_LOG(Log::sceNet, "FriendFinder: adhocctl client error during ping");
+				if (ping_status != ADHOCCTL_CALL_SUCCESS) {
+					ERROR_LOG(Log::sceNet, "FriendFinder: adhocctl client error during ping");
+					killAdhocctlClient(true);
+					continue;
+				} else {
+					// Update Ping Time
+					lastping = now;
+					VERBOSE_LOG(Log::sceNet, "FriendFinder: Sending OPCODE_PING (%llu)", static_cast<unsigned long long>(now));
+				}
+			}
+
+			adhocctl_get_event(adhocctlHandle, &adhocctl_event);
+			if (adhocctl_event.type == ADHOCCTL_CLIENT_EVENT_ERROR) {
+				ERROR_LOG(Log::sceNet, "FriendFinder: adhocctl client error during event fetch");
 				killAdhocctlClient(true);
-				friend_finder_wait();
 				continue;
-			} else {
-				// Update Ping Time
-				lastping = now;
-				VERBOSE_LOG(Log::sceNet, "FriendFinder: Sending OPCODE_PING (%llu)", static_cast<unsigned long long>(now));
 			}
 		}
-
-		// Calculate EnterGameMode Timeout to prevent waiting forever for disconnected players
-		if (isAdhocctlBusy && adhocctlState == ADHOCCTL_STATE_DISCONNECTED && adhocctlCurrentMode == ADHOCCTL_MODE_GAMEMODE && netAdhocGameModeEntered && static_cast<s64>(now - adhocctlStartTime) > netAdhocEnterGameModeTimeout) {
-			netAdhocGameModeEntered = false;
-			notifyAdhocctlHandlers(ADHOCCTL_EVENT_ERROR, SCE_NET_ADHOC_ERROR_TIMEOUT);
-		}
-
-		// handle one event
-		struct adhocctl_event adhocctl_event;
-		adhocctlMutex.lock();
-		adhocctl_get_event(adhocctlHandle, &adhocctl_event);
-		adhocctlMutex.unlock();
 
 		switch (adhocctl_event.type) {
 		case ADHOCCTL_CLIENT_EVENT_WOULD_BLOCK:
 			break;
-		case ADHOCCTL_CLIENT_EVENT_ERROR:{
-			ERROR_LOG(Log::sceNet, "FriendFinder: adhocctl client error during event fetch");
-			const std::lock_guard<std::mutex> adhocctl_guard(adhocctlMutex);
-			killAdhocctlClient(true);
-			break;
-		}
 		case ADHOCCTL_CLIENT_EVENT_LEADER_MAC:{
 			INFO_LOG(Log::sceNet, "FriendFinder: Incoming OPCODE_CONNECT_BSSID [%s]", mac2str((SceNetEtherAddr *)adhocctl_event.leader_mac.mac).c_str());
 			// Update Group BSSID
@@ -1720,7 +1719,7 @@ int friendFinder() {
 			break;
 		}
 		default:
-			ERROR_LOG(Log::sceNet, "FriendFinder: unreachable codepath at %s %d", __FILE__, __LINE__);
+			ERROR_LOG(Log::sceNet, "%s: unreachable codepath at %s %d", __func__, __FILE__, __LINE__);
 			_dbg_assert_(false);
 		}
 
