@@ -3978,6 +3978,13 @@ int NetAdhoc_Term() {
 		// if (_manage_modules != 0) sceUtilityUnloadModule(PSP_MODULE_NET_INET);
 		// Library shutdown
 
+		if (aemuPostofficeEnetThread.joinable()) {
+			aemuPostofficeEnetPumping = false;
+			aemuPostofficeEnetThread.join();
+		}
+
+		deinit_aemu_postoffice();
+
 		netAdhocInited = false;
 		//return hleLogSuccessInfoI(Log::sceNet, 0);
 	}
@@ -3993,13 +4000,6 @@ int NetAdhoc_Term() {
 int sceNetAdhocTerm() {
 	// WLAN might be disabled in the middle of successfull multiplayer, but we still need to cleanup all the sockets right?
 	int retval = NetAdhoc_Term();
-
-	if (aemuPostofficeEnetThread.joinable()) {
-		aemuPostofficeEnetPumping = false;
-		aemuPostofficeEnetThread.join();
-	}
-
-	deinit_aemu_postoffice();
 
 	hleEatMicro(adhocDefaultDelay);
 	return hleLogInfo(Log::sceNet, retval);
