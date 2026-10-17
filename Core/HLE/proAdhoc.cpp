@@ -119,6 +119,7 @@ std::recursive_mutex peerlock;
 AdhocSocket* adhocSockets[MAX_SOCKET];
 bool isOriPort = false;
 bool isLocalServer = false;
+std::mutex g_adhocServerIPMutex;
 SockAddrIN4 g_adhocServerIP;
 SockAddrIN4 g_localhostIP;
 int defaultWlanChannel = PSP_SYSTEMPARAM_ADHOC_CHANNEL_11; // Don't put 0(Auto) here, it needed to be a valid/actual channel number
@@ -127,6 +128,11 @@ static std::mutex chatLogLock;
 static std::vector<ChatLogEntry> chatLog;
 // Enough to scroll back through a decent conversation without growing unbounded.
 static const size_t MAX_CHAT_LOG_LINES = 250;
+
+SockAddrIN4 GetAdhocServerIP() {
+	const std::lock_guard<std::mutex> adhoc_server_ip_guard(g_adhocServerIPMutex);
+	return g_adhocServerIP;
+}
 
 // chatLogLock must be held.
 static void AddChatLogEntry(std::string text) {
@@ -1420,22 +1426,31 @@ int friendFinder() {
 	// Resolve and cache AdhocServer DNS
 	addrinfo* resolved = nullptr;
 	std::string err;
-	g_adhocServerIP.in.sin_addr.s_addr = INADDR_NONE;
 	if (g_Config.bEnableWlan && !net::DNSResolve(g_Config.sProAdhocServer, "", &resolved, err)) {
 		ERROR_LOG(Log::sceNet, "DNS Error Resolving %s\n", g_Config.sProAdhocServer.c_str());
 		g_OSD.Show(OSDType::MESSAGE_ERROR, std::string(n->T("DNS Error Resolving")) + g_Config.sProAdhocServer);
 	}
-	if (resolved) {
-		for (auto ptr = resolved; ptr != NULL; ptr = ptr->ai_next) {
-			switch (ptr->ai_family) {
-			case AF_INET:
-				g_adhocServerIP.in = *(sockaddr_in*)ptr->ai_addr;
-				break;
+	{
+		const std::lock_guard<std::mutex> adhoc_server_ip_guard(g_adhocServerIPMutex);
+		if (resolved) {
+			for (auto ptr = resolved; ptr != NULL; ptr = ptr->ai_next) {
+				switch (ptr->ai_family) {
+				case AF_INET:
+					g_adhocServerIP.in = *(sockaddr_in*)ptr->ai_addr;
+					break;
+				}
 			}
+			net::DNSResolveFree(resolved);
+		} else {
+			g_adhocServerIP.in.sin_addr.s_addr = INADDR_NONE;
 		}
-		net::DNSResolveFree(resolved);
+		g_adhocServerIP.in.sin_port = htons(SERVER_PORT);
 	}
-	g_adhocServerIP.in.sin_port = htons(SERVER_PORT);
+
+	if (resolved) {
+		const std::lock_guard<std::mutex> local_ip_cache_guard(cachedLocalIpMutex);
+		cachedLocalIp = 0xffffffff;
+	}
 
 	// Finder Loop. The flag was set by whoever started us, and cleared to stop us.
 	while (friendFinderRunning) {
@@ -1791,6 +1806,14 @@ int getLocalIp(sockaddr_in* SocketAddress) {
 		serv.sin_addr.s_addr = ipv4;
 		serv.sin_port = htons(kDnsPort);
 
+		auto server_ip = GetAdhocServerIP();
+
+		if (server_ip.in.sin_addr.s_addr != INADDR_NONE) {
+			serv.sin_addr.s_addr = server_ip.in.sin_addr.s_addr;
+		} else {
+			ERROR_LOG(Log::sceNet, "%s: adhoc server ip not resolved, using 8.8.8.8 to fetch local ip", __func__);
+		}
+
 		int err = connect(sock, (struct sockaddr*)&serv, sizeof(serv)); // binds the DGRAM socket to a target address, which sets the address for send(), and the only address to receive data from
 		// this way we get an address from the routing table
 		if (err != SOCKET_ERROR) {
@@ -1802,6 +1825,7 @@ int getLocalIp(sockaddr_in* SocketAddress) {
 				cachedLocalIpMutex.lock();
 				cachedLocalIp = name.sin_addr.s_addr;
 				cachedLocalIpMutex.unlock();
+				INFO_LOG(Log::sceNet, "%s: local ip resolved as %s", __func__, ip2str(name.sin_addr, true).c_str());
 				closesocket(sock);
 				return 0;
 			}
@@ -2110,17 +2134,19 @@ int initNetwork(SceNetAdhocctlAdhocId *adhoc_id) {
 	auto n = GetI18NCategory(I18NCat::NETWORKING);
 	int iResult = 0;
 
+	auto server_ip = GetAdhocServerIP();
+
 	struct adhocctl_addr_v4 adhocctl_addr;
-	adhocctl_addr.ip = g_adhocServerIP.in.sin_addr.s_addr;
-	adhocctl_addr.port = g_adhocServerIP.in.sin_port;
+	adhocctl_addr.ip = server_ip.in.sin_addr.s_addr;
+	adhocctl_addr.port = server_ip.in.sin_port;
 
 	struct adhocctl_addr_v4 _adhocctl_bind_addr = {0};
 	struct adhocctl_addr_v4 *adhocctl_bind_addr = NULL;
 
 	// If Server is at localhost and we are in P2P mode, try to bind socket to specific adapter before connecting to prevent 2nd instance being recognized as already existing 127.0.0.1 by adhocctl server
 	// (may not works in WinXP/2003 for IPv4 due to "Weak End System" model)
-	if (isLoopbackIP(g_adhocServerIP.in.sin_addr.s_addr) && !serverHasRelay) {
-		_adhocctl_bind_addr.ip = g_localhostIP.in.sin_addr.s_addr;
+	if (isLoopbackIP(server_ip.in.sin_addr.s_addr) && !serverHasRelay) {
+		_adhocctl_bind_addr.ip = server_ip.in.sin_addr.s_addr;
 		_adhocctl_bind_addr.port = 0;
 		adhocctl_bind_addr = &_adhocctl_bind_addr;
 	}
@@ -2139,8 +2165,9 @@ int initNetwork(SceNetAdhocctlAdhocId *adhoc_id) {
 	memcpy(product_code.data, adhoc_id->data, ADHOCCTL_ADHOCID_LEN);
 
 	// Don't need to connect if AdhocServer DNS was not resolved
-	if (g_adhocServerIP.in.sin_addr.s_addr == INADDR_NONE)
+	if (server_ip.in.sin_addr.s_addr == INADDR_NONE) {
 		return SOCKET_ERROR;
+	}
 
 	SceNetEtherAddr address;
 	getLocalMac(&address);

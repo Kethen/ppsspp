@@ -787,6 +787,7 @@ extern uint16_t portOffset;
 extern uint32_t minSocketTimeoutUS;
 extern bool isOriPort;
 extern bool isLocalServer;
+extern std::mutex g_adhocServerIPMutex;
 extern SockAddrIN4 g_adhocServerIP; // Resolved Adhoc Server IP so we don't need to repeatedly resolve the DNS again later
 extern SockAddrIN4 g_localhostIP; // Used to differentiate localhost IP on multiple-instance
 extern int defaultWlanChannel; // Default WLAN Channel for Auto, JPCSP uses 11
@@ -1354,3 +1355,6 @@ const char *AdhocCtlStateToString(int state);
 
 // kill adhocctl client after failure so that friend finder thread can reconnect, adhocctlMutex has to be held
 void killAdhocctlClient(bool due_to_error);
+
+// locks g_adhocServerIPMutex and copys out g_adhocServerIP
+SockAddrIN4 GetAdhocServerIP();

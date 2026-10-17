@@ -713,7 +713,8 @@ static void *pdp_postoffice_recover(int idx) {
 	INFO_LOG(Log::sceNet, "%s: recovering pdp socket id %d", __func__, idx + 1);
 
 	struct aemu_postoffice_sock_addr addr;
-	addr.addr = g_adhocServerIP.in.sin_addr.s_addr;
+	auto server_ip = GetAdhocServerIP();
+	addr.addr = server_ip.in.sin_addr.s_addr;
 	addr.port = htons(AEMU_POSTOFFICE_PORT);
 
 	SceNetEtherAddr local_mac;
@@ -1258,7 +1259,8 @@ static void *ptp_listen_postoffice_recover(int idx) {
 	INFO_LOG(Log::sceNet, "%s: recovering ptp listen socket id %d", __func__, idx + 1);
 
 	struct aemu_postoffice_sock_addr addr;
-	addr.addr = g_adhocServerIP.in.sin_addr.s_addr;
+	auto server_ip = GetAdhocServerIP();
+	addr.addr = server_ip.in.sin_addr.s_addr;
 	addr.port = htons(AEMU_POSTOFFICE_PORT);
 
 	int state;
@@ -1422,7 +1424,8 @@ static int ptp_connect_postoffice(int idx, const char *caller) {
 	AdhocSocket *internal = adhocSockets[idx];
 
 	struct aemu_postoffice_sock_addr addr;
-	addr.addr = g_adhocServerIP.in.sin_addr.s_addr;
+	auto server_ip = GetAdhocServerIP();
+	addr.addr = server_ip.in.sin_addr.s_addr;
 	addr.port = htons(AEMU_POSTOFFICE_PORT);
 
 	if (internal->postofficeHandle != NULL) {
@@ -2234,7 +2237,8 @@ int NetAdhocPdpCreate(const char *mac, int port, int bufferSize, u32 flag, bool 
 	}
 
 	// Workaround: Send a dummy 0 size message to AdhocServer IP to make sure the socket actually bound to an address when binded with INADDR_ANY before using getsockname, seems to fix sending from incorrect port issue on MGS:PW on Android
-	addr.sin_addr.s_addr = g_adhocServerIP.in.sin_addr.s_addr;
+	auto server_ip = GetAdhocServerIP();
+	addr.sin_addr.s_addr = server_ip.in.sin_addr.s_addr;
 	addr.sin_port = 0;
 	sendto(usocket, dummyPeekBuf64k, 0, MSG_NOSIGNAL, (struct sockaddr*)&addr, sizeof(addr));
 	// Update sport with the port assigned internal->lport = ntohs(local.sin_port)
