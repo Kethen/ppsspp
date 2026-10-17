@@ -1575,6 +1575,10 @@ int NetAdhocMatching_Stop(int matchingId) {
 		return 0;
 	}
 
+	if (!item->running) {
+		return 0;
+	}
+
 	// This will cause using PdpRecv on this socket to return ERROR_NET_ADHOC_SOCKET_ALERTED (Based on Ys vs. Sora no Kiseki when tested with JPCSP + prx files). Is this used to abort inprogress socket activity?
 	NetAdhoc_SetSocketAlert(item->socket, ADHOC_F_ALERTRECV);
 
@@ -1624,6 +1628,9 @@ int sceNetAdhocMatchingStop(int matchingId) {
 }
 
 int NetAdhocMatching_Delete(int matchingId) {
+	// Stop it first if it's still running
+	NetAdhocMatching_Stop(matchingId);
+
 	// Multithreading Lock
 	std::lock_guard<std::recursive_mutex> peer_guard(peerlock);
 
@@ -1643,10 +1650,6 @@ int NetAdhocMatching_Delete(int matchingId) {
 			// Unlink Left (Other)
 			else prev->next = context->next;
 
-			// Stop it first if it's still running
-			if (context->running) {
-				NetAdhocMatching_Stop(matchingId);
-			}
 			// Delete the Fake PSP Thread
 			//__KernelDeleteThread(item->matching_thid, SCE_KERNEL_ERROR_THREAD_TERMINATED, "AdhocMatching deleted");
 			//delete item->matchingThread;
