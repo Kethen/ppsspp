@@ -1380,6 +1380,8 @@ void killAdhocctlClient(bool due_to_error) {
 	auto n = GetI18NCategory(I18NCat::NETWORKING);
 	if (due_to_error) {
 		g_OSD.Show(OSDType::MESSAGE_ERROR, std::string(n->T("Disconnected from AdhocServer")));
+		// sceNetAdhocctlScan & Create puts this back to true, which will trigger retry
+		g_adhocServerLoginFailed = true;
 	}
 
 	g_adhocServerConnected = false;
@@ -1453,9 +1455,15 @@ int friendFinder() {
 					adhocctlState = ADHOCCTL_STATE_DISCONNECTED;
 					netAdhocGameModeEntered = false;
 					isAdhocctlBusy = false;
+				} else {
+					g_adhocServerLoginFailed = true;
+					g_adhocServerConnected = false;
 				}
 			}
 		}
+
+		// sceNetAdhocctlScan & Create puts this back to true, which will trigger retry
+		isAdhocctlNeedLogin = false;
 
 		auto friend_finder_wait = [] {
 			// This delay time should be 100ms when there is an event otherwise 500ms ?

@@ -529,7 +529,7 @@ static void __AdhocctlNotify(u64 userdata, int cyclesLate) {
 	if (g_Config.bEnableWlan) {
 		const std::lock_guard<std::mutex> adhocctl_guard(adhocctlMutex);
 		enum adhocctl_call_status call_status = ADHOCCTL_CALL_WOULDBLOCK;
-		if (adhocctlHandle != NULL) {
+		if (adhocctlHandle) {
 			switch(req.opcode) {
 			case OPCODE_CONNECT:{
 				call_status = adhocctl_connect(adhocctlHandle, (char *)req.group.data);
@@ -543,8 +543,15 @@ static void __AdhocctlNotify(u64 userdata, int cyclesLate) {
 				call_status = adhocctl_disconnect(adhocctlHandle);
 				break;
 			}
-			default:
+			case OPCODE_LOGIN:{
 				call_status = ADHOCCTL_CALL_SUCCESS;
+				break;
+			}
+			default:
+				ERROR_LOG(Log::sceNet, "%s: unreachable codepath at %s %d", __func__, __FILE__, __LINE__);
+				_dbg_assert_(false);
+				call_status = ADHOCCTL_CALL_SUCCESS;
+				break;
 			}
 		}
 
@@ -556,14 +563,16 @@ static void __AdhocctlNotify(u64 userdata, int cyclesLate) {
 		}
 
 		// either the call actually got a wouldblock, or the client is not ready
+		// in the case of connection/login failure, we still do a timeout first
 		if (call_status == ADHOCCTL_CALL_WOULDBLOCK) {
 			u64 now = (u64)(time_now_d() * 1000000.0);
 			if (now - adhocctlStartTime <= static_cast<u64>(adhocDefaultTimeout) + 500) {
 				// Try again in another 0.5ms until timedout.
 				CoreTiming::ScheduleEvent(usToCycles(500) - cyclesLate, adhocctlNotifyEvent, userdata);
 				return;
-			} else
+			} else {
 				result = SCE_NET_ADHOCCTL_ERROR_BUSY;
+			}
 		}
 	}
 	else
